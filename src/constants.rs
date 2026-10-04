@@ -67,6 +67,13 @@ pub const M_PER_KM: f64 = 1000.0;
 pub const DEFAULT_POINTING_RMS_ARCSEC: f64 = 60.0;
 /// Typical atmospheric seeing offered as the interactive menu's default, arcsec FWHM.
 pub const DEFAULT_SEEING_ARCSEC: f64 = 2.5;
+/// Pass prediction: default minimum elevation for a usable pass, degrees.
+/// Below about 10 deg, extinction, seeing and horizon obstructions dominate.
+pub const DEFAULT_MIN_ELEVATION_DEG: f64 = 10.0;
+/// Pass prediction: longest search window, hours (the library's 30-day limit).
+pub const MAX_PASS_SEARCH_HOURS: f64 = 720.0;
+/// Pass prediction: TLE age beyond which pass times may be off by minutes, days.
+pub const STALE_TLE_DAYS: f64 = 14.0;
 /// Reference wavelength used for the focus calculation unless overridden, micrometers.
 pub const DEFAULT_WAVELENGTH_UM: f64 = 0.55;
 /// Typical PC clock + USB latency, ms. GPS hardware timestamping is sub-millisecond.

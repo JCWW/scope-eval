@@ -918,7 +918,7 @@ mod tests {
             target_mag_override: None,
             exposure_override_s: None,
         };
-        let site = Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None };
+        let site = Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None, location: None };
         (cfg, site)
     }
 

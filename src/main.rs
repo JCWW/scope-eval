@@ -9,6 +9,7 @@ mod checks;
 mod constants;
 mod input;
 mod model;
+mod passes_report;
 mod photometry;
 mod presets;
 mod regimes;
@@ -77,6 +78,7 @@ fn run_interactive() {
             "blank to assume 21.0 and have detection capped at WARN",
             false,
         ),
+        location: None,
     };
     let mut configs: Vec<Config> = Vec::new();
 
@@ -377,6 +379,7 @@ fn run_demo() {
         seeing_arcsec: DEFAULT_SEEING_ARCSEC,
         wavelength_um: DEFAULT_WAVELENGTH_UM,
         sky_mag_arcsec2: None,
+        location: None,
     };
     let scopes = presets::telescopes();
     let cams = presets::cameras();

@@ -363,7 +363,7 @@ mod tests {
     }
 
     fn bare_site() -> Site {
-        Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None }
+        Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None, location: None }
     }
 
     #[test]
