@@ -10,14 +10,19 @@
 //! in README.md. Change them in `regimes()` to match your own catalog.
 
 use crate::checks::{kv, Evaluation, Status};
+use crate::calculations::camera::CameraTimingCalculator;
+use crate::calculations::detection::DetectionCalculator;
+use crate::calculations::mount::MountDynamicsCalculator;
+use crate::calculations::optics::OpticsCalculator;
+use crate::calculations::orbit::OrbitCalculator;
 use crate::constants::{
-    regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2, S_PER_US,
+    regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
+    DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN,
+    EARTH_RADIUS_KM, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
     SIDEREAL_RATE_ARCSEC_PER_S,
 };
 use crate::constants::plausible_ranges as ranges;
-use crate::dynamics;
-use crate::photometry::{self, Photometry};
+use crate::photometry::Photometry;
 use crate::model::{plausible, Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
@@ -65,45 +70,25 @@ pub struct Regime {
     pub limiting_factor: &'static str,
 }
 
-/// Circular-orbit speed at altitude h, km/s:  v = sqrt(mu / (R + h)).
-pub fn circular_speed_km_s(altitude_km: f64) -> f64 {
-    (MU_EARTH / (EARTH_RADIUS_KM + altitude_km)).sqrt()
-}
-
-/// Angular rate of a satellite passing directly overhead, arcsec/s:  omega ~ v / h.
-/// Ignores Earth's rotation (small for LEO, roughly 10% for MEO).
-pub fn overhead_rate_arcsec_s(altitude_km: f64) -> f64 {
-    circular_speed_km_s(altitude_km) / altitude_km * ARCSEC_PER_RADIAN
-}
-
-/// Rate against the stars for an orbit with the given period, arcsec/s:  1,296,000 / period.
-pub fn rate_from_period_arcsec_s(period_s: f64) -> f64 {
-    ARCSEC_PER_CIRCLE / period_s
-}
-
-/// Speed anywhere on an orbit, km/s (vis-viva):  v = sqrt(mu * (2/r - 1/a)).
-pub fn vis_viva_km_s(radius_km: f64, semi_major_axis_km: f64) -> f64 {
-    (MU_EARTH * (2.0 / radius_km - 1.0 / semi_major_axis_km)).sqrt()
-}
-
 /// The representative regimes. Edit here to match your own targets.
 pub fn regimes() -> Vec<Regime> {
     // LEO: 500 km circular orbit passing overhead (the fastest geometry).
     let leo_alt = 500.0;
-    let leo_rate = overhead_rate_arcsec_s(leo_alt);
+    let leo_rate = OrbitCalculator::overhead_rate_arcsec_s(leo_alt);
 
     // MEO: GPS-like 20,200 km circular orbit passing overhead.
     let meo_alt = 20_200.0;
-    let meo_rate = overhead_rate_arcsec_s(meo_alt);
+    let meo_rate = OrbitCalculator::overhead_rate_arcsec_s(meo_alt);
 
     // HEO: Molniya orbit (a = 26,560 km, e = 0.74) observed near apogee.
     let molniya_a = 26_560.0;
     let molniya_apogee_r = molniya_a * (1.0 + 0.74);
     let molniya_apogee_alt = molniya_apogee_r - EARTH_RADIUS_KM;
-    let heo_rate = vis_viva_km_s(molniya_apogee_r, molniya_a) / molniya_apogee_alt * ARCSEC_PER_RADIAN;
+    let heo_rate =
+        OrbitCalculator::vis_viva_km_s(molniya_apogee_r, molniya_a) / molniya_apogee_alt * ARCSEC_PER_RADIAN;
 
     // Cislunar: lunar distance, moving with roughly the Moon's motion against the stars.
-    let lunar_rate = rate_from_period_arcsec_s(27.321_661 * 86_400.0);
+    let lunar_rate = OrbitCalculator::rate_from_period_arcsec_s(27.321_661 * 86_400.0);
 
     vec![
         Regime {
@@ -257,7 +242,8 @@ fn fmt_rate(arcsec_s: f64) -> String {
 
 /// Is the field wide enough to catch the target despite orbit and pointing errors?
 fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
-    let ephem_arcsec = r.ephemeris_uncertainty_km / r.range_km * ARCSEC_PER_RADIAN;
+    let ephem_arcsec =
+        OrbitCalculator::position_uncertainty_arcsec(r.ephemeris_uncertainty_km, r.range_km);
     let (pointing, assumed) = match cfg.payload.mount.as_ref().and_then(|m| m.pointing_rms_arcsec) {
         Some(p) => (p, false),
         None => (DEFAULT_POINTING_RMS_ARCSEC, true),
@@ -297,7 +283,11 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
 /// How long an untracked target stays in the field (informational).
 fn telescope_dwell(ev: &Evaluation, r: &Regime) -> RegimeCheck {
     let short_side = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE;
-    let dwell = if r.rate_vs_ground > 0.0 { short_side / r.rate_vs_ground } else { f64::INFINITY };
+    let dwell = if r.rate_vs_ground > 0.0 {
+        CameraTimingCalculator::crossing_time_s(short_side, r.rate_vs_ground)
+    } else {
+        f64::INFINITY
+    };
     let verdict = if r.rate_vs_ground == 0.0 {
         "Earth-fixed target: it stays in a stopped telescope's field indefinitely.".to_string()
     } else {
@@ -319,7 +309,10 @@ fn telescope_dwell(ev: &Evaluation, r: &Regime) -> RegimeCheck {
 fn telescope_depth(ev: &Evaluation, r: &Regime, reference_area: Option<f64>) -> RegimeCheck {
     let mut details = vec![kv("Effective collecting area", format!("{:.4} m^2", ev.metrics.effective_area_m2))];
     if let Some(ra) = reference_area {
-        details.push(kv("Depth vs reference", format!("{:+.2} mag", 2.5 * (ev.metrics.effective_area_m2 / ra).log10())));
+        details.push(kv(
+            "Depth vs reference",
+            format!("{:+.2} mag", OpticsCalculator::delta_mag(ev.metrics.effective_area_m2, ra)),
+        ));
     }
     RegimeCheck {
         component: Component::Telescope,
@@ -348,10 +341,14 @@ fn fmt_angle(arcsec: f64) -> String {
 
 /// Is the timestamp accurate enough for this regime's motion?
 fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
-    let binned = ev.metrics.plate_scale * ev.metrics.recommended_bin as f64;
-    let required_s = limits::TIMING_PIXEL_FRACTION * binned / r.rate_vs_stars;
-    let actual_s = cfg.timestamp_accuracy_ms / MS_PER_S;
-    let error_arcsec = r.rate_vs_stars * actual_s;
+    let binned = CameraTimingCalculator::binned_plate_scale_arcsec_per_px(
+        ev.metrics.plate_scale,
+        ev.metrics.recommended_bin,
+    );
+    let required_s =
+        CameraTimingCalculator::timing_budget_s(binned, r.rate_vs_stars, limits::TIMING_PIXEL_FRACTION);
+    let actual_s = CameraTimingCalculator::milliseconds_to_seconds(cfg.timestamp_accuracy_ms);
+    let error_arcsec = CameraTimingCalculator::position_error_arcsec(r.rate_vs_stars, actual_s);
 
     let details = vec![
         kv("Target motion vs stars", fmt_rate(r.rate_vs_stars)),
@@ -365,7 +362,14 @@ fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             ),
         ),
         kv("Timestamp accuracy entered", fmt_duration(actual_s)),
-        kv("Resulting position error", format!("{} = {:.3} px", fmt_angle(error_arcsec), error_arcsec / binned)),
+        kv(
+            "Resulting position error",
+            format!(
+                "{} = {:.3} px",
+                fmt_angle(error_arcsec),
+                CameraTimingCalculator::pixels_for_angle(error_arcsec, binned)
+            ),
+        ),
     ];
     let (status, verdict) = if actual_s <= required_s {
         (Status::Pass, "Timing error is within the budget of a quarter binned pixel.".to_string())
@@ -388,7 +392,10 @@ fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
 
 /// How much does row-by-row readout distort positions at this regime's rate?
 fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
-    let binned = ev.metrics.plate_scale * ev.metrics.recommended_bin as f64;
+    let binned = CameraTimingCalculator::binned_plate_scale_arcsec_per_px(
+        ev.metrics.plate_scale,
+        ev.metrics.recommended_bin,
+    );
     let c = &cfg.camera;
     match c.shutter {
         Shutter::Global => RegimeCheck {
@@ -406,9 +413,9 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             verdict: "Ask the vendor for the line time to size the readout skew (skew = rows x line time).".to_string(),
         },
         Shutter::Rolling { line_time_us: Some(lt) } => {
-            let readout_s = c.height_px as f64 * lt * S_PER_US;
-            let skew = r.rate_vs_stars * readout_s;
-            let skew_px = skew / binned;
+            let readout_s = CameraTimingCalculator::rolling_readout_time_s(c.height_px, lt);
+            let skew = CameraTimingCalculator::rolling_shutter_skew_arcsec(r.rate_vs_stars, readout_s);
+            let skew_px = CameraTimingCalculator::pixels_for_angle(skew, binned);
             let frame_h = ev.metrics.fov_h_deg * ARCSEC_PER_DEGREE;
             let frac = skew / frame_h;
             let details = vec![
@@ -439,9 +446,12 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
 /// How long can an exposure be before relative motion smears something (informational).
 fn camera_trailing(cfg: &Config, ev: &Evaluation, r: &Regime, seeing: f64) -> RegimeCheck {
     let _ = cfg;
-    let binned = ev.metrics.plate_scale * ev.metrics.recommended_bin as f64;
-    let t_cross = seeing / r.rate_vs_stars;
-    let streak_px = r.rate_vs_stars / binned;
+    let binned = CameraTimingCalculator::binned_plate_scale_arcsec_per_px(
+        ev.metrics.plate_scale,
+        ev.metrics.recommended_bin,
+    );
+    let t_cross = CameraTimingCalculator::crossing_time_s(seeing, r.rate_vs_stars);
+    let streak_px = CameraTimingCalculator::pixels_per_second(r.rate_vs_stars, binned);
     RegimeCheck {
         component: Component::Camera,
         title: "Exposure vs trailing",
@@ -529,7 +539,7 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
                 ranges::ACCEL_MAX_DEG_S2,
             )
             .map(f64::to_radians);
-            let (z_min_rad, binding) = dynamics::keyhole_rad(omega_rad, max.to_radians(), accel_rad);
+            let (z_min_rad, binding) = MountDynamicsCalculator::keyhole_rad(omega_rad, max.to_radians(), accel_rad);
             let elev = 90.0 - z_min_rad.to_degrees();
             details.push(kv("Highest pass followable (alt-az keyhole)", format!("{elev:.1} deg elevation")));
             details.push(kv("Keyhole set by", format!("{binding} limit")));
@@ -560,7 +570,7 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
 fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
     let title = "Acceleration";
     let omega_rad_s = r.rate_vs_ground / ARCSEC_PER_RADIAN;
-    let required = dynamics::peak_tracking_accel_rad_s2(omega_rad_s) * DEG_PER_RADIAN;
+    let required = MountDynamicsCalculator::peak_tracking_accel_rad_s2(omega_rad_s) * DEG_PER_RADIAN;
     let mut details = vec![kv("Required peak acceleration", format!("{required:.5} deg/s^2"))];
 
     if r.mode == TrackingMode::Stare {
@@ -654,7 +664,7 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
                     None => format!("{settle:.1} s (assumed)"),
                 },
             ));
-            let slew = dynamics::slew_time_s(DEFAULT_SLEW_DISTANCE_DEG, v, a);
+            let slew = MountDynamicsCalculator::slew_time_s(DEFAULT_SLEW_DISTANCE_DEG, v, a);
             let total = slew + settle;
             let fraction = total / window;
             details.push(kv("Slew time", format!("{slew:.1} s")));
@@ -758,7 +768,7 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
     let (target_mag, mag_from) = match cfg.target_mag_override {
         Some(m) => (m, "entered"),
         None => (
-            photometry::derived_target_mag(
+            DetectionCalculator::derived_target_mag(
                 REFERENCE_TARGET_CROSS_SECTION_M2,
                 REFERENCE_TARGET_ALBEDO,
                 r.range_km,
@@ -770,23 +780,23 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
     let residual = residual_rate_arcsec_s(r);
     let (exposure, exp_from) = match cfg.exposure_override_s {
         Some(t) => (t, "entered"),
-        None => (photometry::trail_limited_exposure_s(site.seeing_arcsec, residual), "derived"),
+        None => (DetectionCalculator::trail_limited_exposure_s(site.seeing_arcsec, residual), "derived"),
     };
 
     let scale = ev.metrics.plate_scale;
     let area = ev.metrics.effective_area_m2;
-    let trail = photometry::trail_arcsec(residual, exposure);
-    let n_px = photometry::footprint_px(site.seeing_arcsec, trail, scale);
-    let signal = photometry::signal_e_per_s(target_mag, area, p.qe, p.throughput) * exposure;
-    let sky = photometry::sky_e_per_px_s(p.sky_mag_arcsec2, scale, area, p.qe, p.throughput)
+    let trail = DetectionCalculator::trail_arcsec(residual, exposure);
+    let n_px = DetectionCalculator::footprint_px(site.seeing_arcsec, trail, scale);
+    let signal = DetectionCalculator::signal_e_per_s(target_mag, area, p.qe, p.throughput) * exposure;
+    let sky = DetectionCalculator::sky_e_per_px_s(p.sky_mag_arcsec2, scale, area, p.qe, p.throughput)
         * exposure
         * n_px;
-    let snr = photometry::snr(signal, sky, p.read_noise_e, n_px);
-    let noise_variance = sky + p.read_noise_e * p.read_noise_e * n_px;
-    let m_limit = photometry::limiting_mag(
+    let snr = DetectionCalculator::snr(signal, sky, p.read_noise_e, n_px);
+    let noise_variance = DetectionCalculator::noise_variance_e2(0.0, sky, p.read_noise_e, n_px);
+    let m_limit = DetectionCalculator::limiting_mag(
         limits::DETECT_SNR_THRESHOLD,
         noise_variance,
-        photometry::signal_coefficient(area, p.qe, p.throughput, exposure),
+        DetectionCalculator::signal_coefficient(area, p.qe, p.throughput, exposure),
     );
 
     let mut details = vec![
@@ -1275,26 +1285,26 @@ mod tests {
     #[test]
     fn leo_overhead_rate() {
         // 500 km: v = 7.61 km/s, omega = v / h = 0.0152 rad/s = ~3,140"/s = 0.87 deg/s.
-        assert!(close(circular_speed_km_s(500.0), 7.613, 0.002));
-        assert!(close(overhead_rate_arcsec_s(500.0), 3140.0, 2.0));
+        assert!(close(OrbitCalculator::circular_speed_km_s(500.0), 7.613, 0.002));
+        assert!(close(OrbitCalculator::overhead_rate_arcsec_s(500.0), 3140.0, 2.0));
     }
 
     #[test]
     fn meo_overhead_rate() {
-        assert!(close(overhead_rate_arcsec_s(20_200.0), 39.6, 0.2));
+        assert!(close(OrbitCalculator::overhead_rate_arcsec_s(20_200.0), 39.6, 0.2));
     }
 
     #[test]
     fn geo_and_lunar_rates_from_period() {
-        assert!(close(rate_from_period_arcsec_s(86_164.0905), 15.041, 0.001));
-        assert!(close(rate_from_period_arcsec_s(27.321_661 * 86_400.0), 0.549, 0.001));
+        assert!(close(OrbitCalculator::rate_from_period_arcsec_s(86_164.0905), 15.041, 0.001));
+        assert!(close(OrbitCalculator::rate_from_period_arcsec_s(27.321_661 * 86_400.0), 0.549, 0.001));
     }
 
     #[test]
     fn molniya_apogee_rate() {
         let a = 26_560.0;
         let r = a * 1.74;
-        let v = vis_viva_km_s(r, a);
+        let v = OrbitCalculator::vis_viva_km_s(r, a);
         assert!(close(v, 1.497, 0.005));
         assert!(close(v / (r - EARTH_RADIUS_KM) * ARCSEC_PER_RADIAN, 7.75, 0.05));
     }

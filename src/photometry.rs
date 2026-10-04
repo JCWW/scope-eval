@@ -1,17 +1,14 @@
 //! Photometry: how bright a target is, and whether it can be detected.
 //!
-//! Every function here is pure (numbers in, number out) so it can be unit
-//! tested without the interactive front end, mirroring the calculation
-//! section of `checks.rs`. The judgments live in `regimes.rs`.
+//! This module resolves entered photometric inputs and tracks which defaults
+//! were assumed. Detection equations live in `calculations::detection`; the
+//! judgments live in `regimes.rs`.
 //!
 //! Formulas and worked examples are in README.md.
 
-use std::f64::consts::PI;
-
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::{
-    DEFAULT_QE, DEFAULT_READ_NOISE_E, DEFAULT_SKY_MAG_ARCSEC2, DEFAULT_THROUGHPUT, MAX_EXPOSURE_S, M_PER_KM,
-    PHOTONS_M2_S_MAG0, SUN_APPARENT_MAG,
+    DEFAULT_QE, DEFAULT_READ_NOISE_E, DEFAULT_SKY_MAG_ARCSEC2, DEFAULT_THROUGHPUT,
 };
 use crate::model::{plausible, Camera, Site, Telescope};
 
@@ -76,101 +73,46 @@ impl Photometry {
     }
 }
 
-/// Apparent magnitude of a diffuse (Lambertian) target.
-///
-/// `m = m_sun - 2.5 log10(albedo * area * phase / (pi * d^2))`, with the area
-/// in square metres and the range converted to metres. The `1/pi` is the
-/// Lambertian scattering factor.
-pub fn derived_target_mag(cross_section_m2: f64, albedo: f64, range_km: f64, phase: f64) -> f64 {
-    let d_m = range_km * M_PER_KM;
-    SUN_APPARENT_MAG - 2.5 * (albedo * cross_section_m2 * phase / (PI * d_m * d_m)).log10()
-}
-
-/// Electrons per second from a point source of the given magnitude.
-pub fn signal_e_per_s(mag: f64, eff_area_m2: f64, qe: f64, throughput: f64) -> f64 {
-    PHOTONS_M2_S_MAG0 * 10f64.powf(-0.4 * mag) * eff_area_m2 * qe * throughput
-}
-
-/// Electrons per second per pixel from the sky background.
-///
-/// The sky is quoted per square arcsecond, so this is the point-source rate
-/// for that surface brightness scaled by the solid angle one pixel covers.
-pub fn sky_e_per_px_s(
-    sky_mag_arcsec2: f64,
-    plate_scale: f64,
-    eff_area_m2: f64,
-    qe: f64,
-    throughput: f64,
-) -> f64 {
-    signal_e_per_s(sky_mag_arcsec2, eff_area_m2, qe, throughput) * plate_scale * plate_scale
-}
-
-/// Electrons a magnitude-zero target would deposit over the whole exposure.
-/// Inverting the SNR equation for a magnitude needs this; see `limiting_mag`.
-pub fn signal_coefficient(eff_area_m2: f64, qe: f64, throughput: f64, exposure_s: f64) -> f64 {
-    PHOTONS_M2_S_MAG0 * eff_area_m2 * qe * throughput * exposure_s
-}
-
-/// How far the target moves across the sensor during the exposure, arcsec.
-pub fn trail_arcsec(residual_rate_arcsec_s: f64, exposure_s: f64) -> f64 {
-    residual_rate_arcsec_s * exposure_s
-}
-
-/// Longest exposure that keeps the target's trail inside one seeing disk.
-///
-/// A target the mount holds still has no residual rate and so nothing to
-/// trail, which would imply an unbounded exposure; that case and any
-/// non-positive rate return `MAX_EXPOSURE_S`.
-pub fn trail_limited_exposure_s(seeing_arcsec: f64, residual_rate_arcsec_s: f64) -> f64 {
-    if residual_rate_arcsec_s <= 0.0 {
-        MAX_EXPOSURE_S
-    } else {
-        (seeing_arcsec / residual_rate_arcsec_s).min(MAX_EXPOSURE_S)
-    }
-}
-
-/// Pixels the target's light lands on: a seeing disk smeared along the trail.
-///
-/// Approximated as a rectangle, matching the `(pixels across)^2` footprint
-/// approximation already used by check 5. The ratio between configurations is
-/// what matters, not the absolute pixel count.
-pub fn footprint_px(seeing_arcsec: f64, trail_arcsec: f64, plate_scale: f64) -> f64 {
-    let across = seeing_arcsec / plate_scale;
-    let along = (seeing_arcsec + trail_arcsec) / plate_scale;
-    across * along
-}
-
-/// Signal-to-noise ratio for a target, against shot, sky and read noise.
-///
-/// `SNR = S / sqrt(S + B + R^2 n)`. The signal appears in the noise term
-/// because photon arrival is Poisson: its own shot noise is `sqrt(S)`.
-pub fn snr(signal_e: f64, sky_e_total: f64, read_noise_e: f64, n_px: f64) -> f64 {
-    let variance = signal_e + sky_e_total + read_noise_e * read_noise_e * n_px;
-    if variance <= 0.0 {
-        0.0
-    } else {
-        signal_e / variance.sqrt()
-    }
-}
-
-/// Faintest magnitude that reaches `threshold`.
-///
-/// `noise_variance_e2` is the non-signal variance `B + R^2 n`, and
-/// `signal_coefficient` is what a magnitude-zero target would deposit over
-/// the exposure (see [`signal_coefficient`]).
-///
-/// Setting `S / sqrt(S + N) = T` gives the quadratic `S^2 - T^2 S - T^2 N = 0`,
-/// whose positive root is `S = (T^2 + sqrt(T^4 + 4 T^2 N)) / 2`. Exact, so no
-/// iteration, and it inverts `snr` exactly rather than approximately.
-pub fn limiting_mag(threshold: f64, noise_variance_e2: f64, signal_coefficient: f64) -> f64 {
-    let t2 = threshold * threshold;
-    let s_min = (t2 + (t2 * t2 + 4.0 * t2 * noise_variance_e2).sqrt()) / 2.0;
-    -2.5 * (s_min / signal_coefficient).log10()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calculations::detection::DetectionCalculator as Calculator;
+
+    fn derived_target_mag(area: f64, albedo: f64, range_km: f64, phase: f64) -> f64 {
+        Calculator::derived_target_mag(area, albedo, range_km, phase)
+    }
+
+    fn signal_e_per_s(mag: f64, area: f64, qe: f64, throughput: f64) -> f64 {
+        Calculator::signal_e_per_s(mag, area, qe, throughput)
+    }
+
+    fn sky_e_per_px_s(mag: f64, scale: f64, area: f64, qe: f64, throughput: f64) -> f64 {
+        Calculator::sky_e_per_px_s(mag, scale, area, qe, throughput)
+    }
+
+    fn signal_coefficient(area: f64, qe: f64, throughput: f64, exposure: f64) -> f64 {
+        Calculator::signal_coefficient(area, qe, throughput, exposure)
+    }
+
+    fn trail_arcsec(rate: f64, exposure: f64) -> f64 {
+        Calculator::trail_arcsec(rate, exposure)
+    }
+
+    fn trail_limited_exposure_s(seeing: f64, rate: f64) -> f64 {
+        Calculator::trail_limited_exposure_s(seeing, rate)
+    }
+
+    fn footprint_px(seeing: f64, trail: f64, scale: f64) -> f64 {
+        Calculator::footprint_px(seeing, trail, scale)
+    }
+
+    fn snr(signal: f64, sky: f64, read_noise: f64, pixels: f64) -> f64 {
+        Calculator::snr(signal, sky, read_noise, pixels)
+    }
+
+    fn limiting_mag(threshold: f64, noise: f64, signal: f64) -> f64 {
+        Calculator::limiting_mag(threshold, noise, signal)
+    }
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol

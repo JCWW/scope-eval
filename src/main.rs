@@ -4,9 +4,9 @@
 //! comparison of the presets, or `--help` for usage. See README.md for the
 //! full explanation of every calculation.
 
+mod calculations;
 mod checks;
 mod constants;
-mod dynamics;
 mod input;
 mod model;
 mod photometry;

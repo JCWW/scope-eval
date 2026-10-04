@@ -871,7 +871,7 @@ In the demo, the RASA 11 is the fastest searcher, the DeltaRho 350 balances dept
 
 ## Thresholds and how to tune them
 
-All judgment thresholds live in the `limits` module at the top of `src/checks.rs`.
+All judgment thresholds live in `src/constants.rs`, separated into general-check and orbital-regime groups.
 
 | Constant | Default | Check | Meaning |
 |---|---|---|---|
@@ -1003,9 +1003,15 @@ Preset mounts leave pointing accuracy and TLE-tracking support blank on purpose.
 ```
 src/
   main.rs      command-line entry point, interactive menus, --demo, --help
-  model.rs     data types: Telescope, Camera, Mount, Site, Payload, Config, Obstruction, SpotSpec
-  checks.rs    constants, thresholds, pure calculation functions, the eight checks, unit tests
-  regimes.rs   orbital regimes, orbital-rate formulas, telescope/camera/mount regime checks, unit tests
+  model/       data types: Telescope, Camera, Mount, Site, Payload, Config, Obstruction, SpotSpec
+  calculations/
+    optics.rs    telescope geometry, plate scale, sampling, focus and collecting-area calculations
+    camera.rs    pixel scale, timestamp accuracy and rolling-shutter calculations
+    orbit.rs     circular speed, vis-viva speed and apparent orbital-rate calculations
+    mount.rs     mount dynamics, payload capacity and back-focus calculations
+    detection.rs target brightness, exposure, signal, noise and limiting-magnitude calculations
+  checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
+  regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
   presets.rs   built-in telescopes, cameras and mounts, with sources
   report.rs    printing evaluations, regime summaries and details, comparison tables, formula summary
   input.rs     validated terminal input helpers
@@ -1013,18 +1019,19 @@ src/
 
 **Design notes**
 
-* The calculation functions at the top of `checks.rs` (plate scale, ideal pixel, effective area, CFZ and so on) are pure functions with no input/output. They can be reused from other code or wrapped in a different front end, such as a GUI or web service.
-* Each `check_*` function returns a `CheckResult` (status, detail lines, verdict) and is independent of how results are displayed.
+* Each `calculations/` module groups related equations in a small calculator type. For example, `OpticsCalculator` contains plate-scale and field-of-view equations, while `MountDynamicsCalculator` contains tracking and slew equations. Calculator methods are pure and covered by worked-example tests.
+* The calculators contain physics and math only. `checks.rs` and `regimes.rs` apply engineering thresholds to those results and return human-readable check results.
+* Each general `check_*` function returns a `CheckResult` (status, detail lines, verdict) and is independent of how results are displayed.
 * `evaluate_all` enforces the "first configuration is the reference" rule in one place.
 * `evaluate` runs the eight checks, then calls `evaluate_regimes` in `regimes.rs`, which reuses the computed plate scale, bin, field and area. Regime results are stored on the `Evaluation`.
 
 **Adding a preset.** Add a `Telescope` or `Camera` entry to `src/presets.rs`. Fill in the `source` field with where the numbers came from. Use `Obstruction::ByDiameter` or `Obstruction::ByArea` to match how the spec sheet quotes it.
 
-**Changing a rule of thumb.** Edit the constant in the `limits` module of `src/checks.rs`. The unit tests check the physics, not the thresholds, so they keep passing.
+**Changing a rule of thumb.** Edit the relevant limit in `src/constants.rs`. Calculator tests check the equations and worked examples; evaluation checks apply the judgment thresholds.
 
-**Adding a check.** Write a `check_*` function in `checks.rs` returning a `CheckResult`, add it to the `checks` vector in `evaluate`, and give it the next number. The report and comparison table pick it up automatically.
+**Adding a check.** Write a `check_*` function in `checks.rs` returning a `CheckResult`, call the appropriate calculator for its physical quantities, add it to the `checks` vector in `evaluate`, and give it the next number. The report and comparison table pick it up automatically.
 
-**Adding or editing a regime.** Add a `Regime` to `regimes()` in `src/regimes.rs`. Use the helper functions (`overhead_rate_arcsec_s`, `rate_from_period_arcsec_s`, `vis_viva_km_s`) to derive rates, and set the range, prediction error, usual tracking mode and whether non-sidereal tracking is required. Every report and table picks it up automatically.
+**Adding or editing a regime.** Add a `Regime` to `regimes()` in `src/regimes.rs`. Use `OrbitCalculator` methods (`overhead_rate_arcsec_s`, `rate_from_period_arcsec_s`, `vis_viva_km_s`) to derive rates, and set the range, prediction error, usual tracking mode and whether non-sidereal tracking is required. Every report and table picks it up automatically.
 
 **Adding a regime check.** Write a function returning a `RegimeCheck` tagged with its `Component`, and add it to the list in `evaluate_regimes`. Component and overall statuses are recomputed automatically.
 

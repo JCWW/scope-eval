@@ -1,5 +1,6 @@
 //! Printing evaluations and the comparison table.
 
+use crate::calculations::optics::OpticsCalculator;
 use crate::checks::{Evaluation, Status};
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::DEFAULT_SKY_MAG_ARCSEC2;
@@ -92,7 +93,7 @@ pub fn print_comparison(evals: &[Evaluation]) {
     );
     for e in evals {
         let m = &e.metrics;
-        let dmag = 2.5 * (m.effective_area_m2 / reference.metrics.effective_area_m2).log10();
+        let dmag = OpticsCalculator::delta_mag(m.effective_area_m2, reference.metrics.effective_area_m2);
         let search = m.etendue / reference.metrics.etendue;
         let load = m
             .payload_fraction

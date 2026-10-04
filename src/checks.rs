@@ -1,120 +1,17 @@
 //! The eight checks, plus supplementary GEO motion and timing figures.
 //!
-//! Every formula here is explained in README.md. The calculation functions
-//! at the top of the file are pure (numbers in, number out) so they can be
-//! unit tested and reused without the interactive front end. The `check_*`
-//! functions turn those numbers into a pass/warn/fail judgment with an
-//! explanation.
+//! Physical equations live in `calculations/`. The `check_*` functions apply
+//! engineering thresholds to those calculator results and explain the outcome.
 
+use crate::calculations::camera::CameraTimingCalculator;
+use crate::calculations::mount::PayloadCalculator;
+use crate::calculations::optics::OpticsCalculator;
 use crate::constants::{
-    checks_limits as limits, ARCMIN_PER_DEGREE, ARCSEC_PER_RADIAN, DEG_PER_RADIAN, FWHM_PER_RMS_RADIUS, KG_PER_LB,
-    MM_PER_M, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S, TIMING_ERROR_EXAMPLE_S, UM_PER_MM,
+    checks_limits as limits, ARCMIN_PER_DEGREE, KG_PER_LB, SIDEREAL_RATE_ARCSEC_PER_S,
+    TIMING_ERROR_EXAMPLE_S,
 };
-use crate::model::{Camera, Config, Shutter, Site, SpotConvention, SpotPoint, Telescope};
+use crate::model::{Camera, Config, Shutter, Site, SpotConvention, Telescope};
 use crate::regimes::{evaluate_regimes, RegimeEvaluation};
-use std::f64::consts::PI;
-
-// ---------------------------------------------------------------------------
-// Pure calculations
-// ---------------------------------------------------------------------------
-
-/// Plate scale: sky angle seen by one pixel, arcsec/px.
-/// Small-angle rule: angle = size / distance, with the focal length as the distance.
-pub fn plate_scale_arcsec_per_px(pixel_um: f64, focal_length_mm: f64) -> f64 {
-    ARCSEC_PER_RADIAN * (pixel_um / UM_PER_MM) / focal_length_mm
-}
-
-/// How many pixels span a star's FWHM.
-pub fn pixels_across_star(seeing_arcsec: f64, plate_scale: f64) -> f64 {
-    seeing_arcsec / plate_scale
-}
-
-/// Square bin factor (1..=MAX_BIN) that brings pixels-across-a-star closest to the target.
-pub fn best_bin(pixels_across: f64) -> u32 {
-    (1..=limits::MAX_BIN)
-        .min_by(|a, b| {
-            let da = (pixels_across / *a as f64 - limits::SAMPLING_TARGET).abs();
-            let db = (pixels_across / *b as f64 - limits::SAMPLING_TARGET).abs();
-            da.partial_cmp(&db).unwrap()
-        })
-        .unwrap()
-}
-
-/// Pixel size (um) that would put SAMPLING_TARGET pixels across a star at this focal length.
-/// This is the plate-scale formula solved for pixel size.
-pub fn ideal_pixel_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
-    (seeing_arcsec / limits::SAMPLING_TARGET) / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
-}
-
-/// Physical size of the seeing blur on the focal plane, um.
-pub fn seeing_blur_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
-    seeing_arcsec / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
-}
-
-/// Convert a quoted RMS spot figure to an approximate FWHM, assuming a round Gaussian blur.
-pub fn spot_fwhm_um(rms_um: f64, is_radius: bool) -> f64 {
-    if is_radius {
-        FWHM_PER_RMS_RADIUS * rms_um
-    } else {
-        FWHM_PER_RMS_RADIUS * rms_um / 2.0
-    }
-}
-
-/// Combine two independent blurs. Widths of independent Gaussian blurs add in quadrature.
-pub fn quadrature(a: f64, b: f64) -> f64 {
-    a.hypot(b)
-}
-
-/// RMS spot at a field radius, by linear interpolation between quoted points.
-/// Returns (value, extrapolated?). Beyond the last point it extrapolates linearly
-/// from the last two points (never below the last value), and flags it.
-pub fn spot_rms_at(points: &[SpotPoint], radius_mm: f64) -> Option<(f64, bool)> {
-    let first = points.first()?;
-    if points.len() == 1 {
-        return Some((first.rms_um, radius_mm > first.field_radius_mm));
-    }
-    if radius_mm <= first.field_radius_mm {
-        return Some((first.rms_um, false));
-    }
-    for w in points.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if radius_mm <= b.field_radius_mm {
-            let span = b.field_radius_mm - a.field_radius_mm;
-            if span <= 0.0 {
-                return Some((b.rms_um, false));
-            }
-            let t = (radius_mm - a.field_radius_mm) / span;
-            return Some((a.rms_um + t * (b.rms_um - a.rms_um), false));
-        }
-    }
-    let n = points.len();
-    let (a, b) = (points[n - 2], points[n - 1]);
-    let span = b.field_radius_mm - a.field_radius_mm;
-    let slope = if span > 0.0 { (b.rms_um - a.rms_um) / span } else { 0.0 };
-    let value = b.rms_um + slope * (radius_mm - b.field_radius_mm);
-    Some((value.max(b.rms_um), true))
-}
-
-/// Light-collecting area after subtracting the central obstruction, m^2.
-pub fn effective_area_m2(aperture_mm: f64, blocked_area_fraction: f64) -> f64 {
-    let d_m = aperture_mm / MM_PER_M;
-    PI / 4.0 * d_m * d_m * (1.0 - blocked_area_fraction)
-}
-
-/// Depth gain in magnitudes from collecting more light. Positive = fainter limit.
-pub fn delta_mag(area_m2: f64, reference_area_m2: f64) -> f64 {
-    2.5 * (area_m2 / reference_area_m2).log10()
-}
-
-/// Field of view along one sensor axis, degrees (small-angle approximation).
-pub fn fov_deg(sensor_mm: f64, focal_length_mm: f64) -> f64 {
-    sensor_mm / focal_length_mm * DEG_PER_RADIAN
-}
-
-/// Critical focus zone half-width, um: +/- 2.44 * lambda * N^2.
-pub fn critical_focus_zone_um(wavelength_um: f64, f_ratio: f64) -> f64 {
-    2.44 * wavelength_um * f_ratio * f_ratio
-}
 
 // ---------------------------------------------------------------------------
 // Results
@@ -239,10 +136,10 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
 /// Check 2: is a star spread across the right number of pixels?
 /// Returns the check plus (plate scale, pixels across, recommended bin).
 pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f64, f64, u32) {
-    let scale = plate_scale_arcsec_per_px(c.pixel_um, t.focal_length_mm);
-    let p = pixels_across_star(site.seeing_arcsec, scale);
-    let bin = best_bin(p);
-    let footprint = p * p;
+    let scale = OpticsCalculator::plate_scale_arcsec_per_px(c.pixel_um, t.focal_length_mm);
+    let p = OpticsCalculator::pixels_across_star(site.seeing_arcsec, scale);
+    let bin = OpticsCalculator::best_bin(p);
+    let footprint = OpticsCalculator::star_footprint_px(p);
     let ideal_footprint = limits::SAMPLING_TARGET * limits::SAMPLING_TARGET;
 
     let mut details = vec![
@@ -256,7 +153,10 @@ pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f
         kv("Pixels in a star's footprint (native)", format!("~{footprint:.0}  (ideal ~{ideal_footprint:.0})")),
         kv(
             "Read-noise penalty vs ideal (CMOS)",
-            format!("x{:.1} read-noise variance", (footprint / ideal_footprint).max(1.0)),
+            format!(
+                "x{:.1} read-noise variance",
+                OpticsCalculator::read_noise_variance_penalty(footprint, ideal_footprint)
+            ),
         ),
     ];
     if let Some(r) = c.read_noise_e {
@@ -306,16 +206,8 @@ pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f
 
 /// Check 3: what pixel size does this telescope want, and does the camera provide it?
 pub fn check_ideal_pixel(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
-    let ideal = ideal_pixel_um(site.seeing_arcsec, t.focal_length_mm);
-    // Bin factor whose effective pixel is closest to ideal on a ratio (log) scale.
-    let b = (1..=limits::MAX_BIN)
-        .min_by(|x, y| {
-            let ex = (c.pixel_um * *x as f64 / ideal).ln().abs();
-            let ey = (c.pixel_um * *y as f64 / ideal).ln().abs();
-            ex.partial_cmp(&ey).unwrap()
-        })
-        .unwrap();
-    let effective = c.pixel_um * b as f64;
+    let ideal = OpticsCalculator::ideal_pixel_um(site.seeing_arcsec, t.focal_length_mm);
+    let (b, effective) = OpticsCalculator::closest_binned_pixel_um(c.pixel_um, ideal);
     let m = effective / ideal;
     let in_range = (limits::PIXEL_MATCH_LOW..=limits::PIXEL_MATCH_HIGH).contains(&m);
 
@@ -362,7 +254,7 @@ fn optics_status(growth: f64) -> Status {
 
 /// Check 4: are the optics sharp enough that the atmosphere, not the glass, limits the image?
 pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
-    let seeing_um = seeing_blur_um(site.seeing_arcsec, t.focal_length_mm);
+    let seeing_um = OpticsCalculator::seeing_blur_um(site.seeing_arcsec, t.focal_length_mm);
     let mut details = vec![kv("Seeing blur at the focal plane", format!("{seeing_um:.1} um FWHM"))];
 
     let spot = match &t.spot {
@@ -379,8 +271,8 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
     };
 
     let corner_r = c.diagonal_mm() / 2.0;
-    let (center_rms, _) = spot_rms_at(&spot.points, 0.0).unwrap();
-    let (corner_rms, extrapolated) = spot_rms_at(&spot.points, corner_r).unwrap();
+    let (center_rms, _) = OpticsCalculator::spot_rms_at(&spot.points, 0.0).unwrap();
+    let (corner_rms, extrapolated) = OpticsCalculator::spot_rms_at(&spot.points, corner_r).unwrap();
     let first_r = spot.points[0].field_radius_mm;
     let center_note = if first_r > 0.0 {
         format!("  (closest quoted point is {first_r:.0} mm off-axis)")
@@ -402,8 +294,8 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
     let mut results: Vec<(Status, f64)> = Vec::new();
     for (name, is_radius) in readings {
         let growth = |rms: f64| {
-            let optics = spot_fwhm_um(rms, is_radius);
-            (optics, quadrature(seeing_um, optics) / seeing_um - 1.0)
+            let optics = OpticsCalculator::spot_fwhm_um(rms, is_radius);
+            (optics, OpticsCalculator::blur_growth_fraction(seeing_um, optics))
         };
         let (fc, gc) = growth(center_rms);
         let (fe, ge) = growth(corner_rms);
@@ -447,11 +339,10 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
 
 /// Check 5: effective collecting area and depth relative to the reference.
 pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckResult, f64) {
-    let d_m = t.aperture_mm / MM_PER_M;
-    let geometric = PI / 4.0 * d_m * d_m;
+    let geometric = OpticsCalculator::geometric_area_m2(t.aperture_mm);
     let blocked = t.obstruction.area_fraction();
-    let area = effective_area_m2(t.aperture_mm, blocked);
-    let equivalent_d = 2.0 * (area / PI).sqrt() * MM_PER_M;
+    let area = OpticsCalculator::effective_area_m2(t.aperture_mm, blocked);
+    let equivalent_d = OpticsCalculator::equivalent_aperture_mm(area);
 
     let mut details = vec![
         kv("Geometric area (pi/4 x D^2)", format!("{geometric:.4} m^2")),
@@ -462,7 +353,7 @@ pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckR
     let verdict = match reference {
         Some(r) => {
             let ratio = area / r.effective_area_m2;
-            let dm = delta_mag(area, r.effective_area_m2);
+            let dm = OpticsCalculator::delta_mag(area, r.effective_area_m2);
             details.push(kv("Reference configuration", r.label.clone()));
             details.push(kv("Light vs reference", format!("x{ratio:.2}")));
             details.push(kv("Depth vs reference", format!("{dm:+.2} mag")));
@@ -485,10 +376,10 @@ pub fn check_field_and_search(
     area_m2: f64,
     reference: Option<&Reference>,
 ) -> (CheckResult, f64, f64, f64) {
-    let w = fov_deg(c.width_mm(), t.focal_length_mm);
-    let h = fov_deg(c.height_mm(), t.focal_length_mm);
-    let fov_area = w * h;
-    let etendue = area_m2 * fov_area;
+    let w = OpticsCalculator::fov_deg(c.width_mm(), t.focal_length_mm);
+    let h = OpticsCalculator::fov_deg(c.height_mm(), t.focal_length_mm);
+    let fov_area = OpticsCalculator::field_area_deg2(w, h);
+    let etendue = OpticsCalculator::etendue_m2_deg2(area_m2, fov_area);
 
     let mut details = vec![
         kv(
@@ -522,7 +413,7 @@ pub fn check_field_and_search(
 /// Check 7: how tight is focus?
 pub fn check_focus(t: &Telescope, site: &Site) -> (CheckResult, f64) {
     let n = t.f_ratio();
-    let cfz = critical_focus_zone_um(site.wavelength_um, n);
+    let cfz = OpticsCalculator::critical_focus_zone_um(site.wavelength_um, n);
     let details = vec![
         kv("Focal ratio N", format!("f/{n:.2}")),
         kv("Critical focus zone", format!("+/-{cfz:.1} um  (total depth {:.1} um)", 2.0 * cfz)),
@@ -562,7 +453,7 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
         unknown.push("camera");
         0.0
     });
-    let total = ota + cam + p.accessories_lb;
+    let total = PayloadCalculator::total_weight_lb(ota, cam, p.accessories_lb);
     details.push(kv(
         "Payload (OTA + camera + accessories)",
         format!("{ota:.1} + {cam:.1} + {:.1} = {total:.1} lb ({:.1} kg)", p.accessories_lb, total * KG_PER_LB),
@@ -573,7 +464,7 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
 
     match p.mount_capacity_lb() {
         Some(cap) if t.weight_lb.is_some() => {
-            let f = total / cap;
+            let f = PayloadCalculator::capacity_fraction(total, cap);
             fraction = Some(f);
             let name = p.mount.as_ref().map(|m| m.name.as_str()).unwrap_or("Mount");
             details.push(kv("Mount", name.to_string()));
@@ -595,13 +486,14 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
 
     match (t.back_focus_mm, p.back_focus_required_mm) {
         (Some(avail), Some(req)) => {
+            let margin = PayloadCalculator::back_focus_margin_mm(avail, req);
             details.push(kv("Back focus available / required", format!("{avail:.1} / {req:.1} mm")));
-            if avail >= req {
+            if margin >= 0.0 {
                 statuses.push(Status::Pass);
-                notes.push(format!("Back focus has {:.1} mm to spare.", avail - req));
+                notes.push(format!("Back focus has {margin:.1} mm to spare."));
             } else {
                 statuses.push(Status::Fail);
-                notes.push(format!("Back focus is {:.1} mm short.", req - avail));
+                notes.push(format!("Back focus is {:.1} mm short.", -margin));
             }
         }
         (Some(avail), None) => details.push(kv("Back focus available", format!("{avail:.1} mm (no requirement entered)"))),
@@ -618,34 +510,44 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
 /// Supplementary timing reference for GEO stare mode: star drift, timing sensitivity,
 /// rolling-shutter skew. The regime evaluations generalize these to other orbits.
 pub fn geo_motion_and_timing(c: &Camera, plate_scale: f64, bin: u32) -> Vec<String> {
-    let binned = plate_scale * bin as f64;
+    let binned = CameraTimingCalculator::binned_plate_scale_arcsec_per_px(plate_scale, bin);
     let rate = SIDEREAL_RATE_ARCSEC_PER_S;
     let mut out = vec![
         kv("Star drift past a GEO target (stare mode)", format!("{rate:.2}\"/s")),
         kv(
             &format!("Star streak per 1 s exposure ({bin}x{bin} bin)"),
-            format!("{:.1} px", rate / binned),
+            format!("{:.1} px", CameraTimingCalculator::pixels_per_second(rate, binned)),
         ),
         kv(
             "Position error per 10 ms of timing error",
             format!(
                 "{:.3}\" = {:.2} px ({bin}x{bin} bin)",
-                rate * TIMING_ERROR_EXAMPLE_S,
-                rate * TIMING_ERROR_EXAMPLE_S / binned
+                CameraTimingCalculator::position_error_arcsec(rate, TIMING_ERROR_EXAMPLE_S),
+                CameraTimingCalculator::pixels_for_angle(
+                    CameraTimingCalculator::position_error_arcsec(rate, TIMING_ERROR_EXAMPLE_S),
+                    binned
+                )
             ),
         ),
     ];
     match c.shutter {
         Shutter::Global => out.push(kv("Shutter", "global: every row exposed at once, no row correction".to_string())),
         Shutter::Rolling { line_time_us: Some(lt) } => {
-            let skew_s = c.height_px as f64 * lt * S_PER_US;
+            let skew_s = CameraTimingCalculator::rolling_readout_time_s(c.height_px, lt);
             out.push(kv(
                 "Rolling-shutter readout skew",
                 format!("{} rows x {lt:.3} us = {:.3} s", c.height_px, skew_s),
             ));
             out.push(kv(
                 "Star position skew, top to bottom",
-                format!("{:.2}\" = {:.1} px ({bin}x{bin} bin)", rate * skew_s, rate * skew_s / binned),
+                format!(
+                    "{:.2}\" = {:.1} px ({bin}x{bin} bin)",
+                    CameraTimingCalculator::rolling_shutter_skew_arcsec(rate, skew_s),
+                    CameraTimingCalculator::pixels_for_angle(
+                        CameraTimingCalculator::rolling_shutter_skew_arcsec(rate, skew_s),
+                        binned
+                    )
+                ),
             ));
             out.push(kv("Per-row time correction", format!("t(row) = t(first row) + row x {lt:.3} us")));
         }
@@ -709,36 +611,10 @@ pub fn evaluate_all(configs: &[Config], site: &Site) -> Vec<Evaluation> {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::model::Obstruction;
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
-    }
-
-    #[test]
-    fn plate_scale_deltarho350_imx455() {
-        assert!(close(plate_scale_arcsec_per_px(3.76, 1050.0), 0.7386, 0.0005));
-    }
-
-    #[test]
-    fn plate_scale_rasa11_imx455() {
-        assert!(close(plate_scale_arcsec_per_px(3.76, 620.0), 1.2509, 0.0005));
-    }
-
-    #[test]
-    fn field_of_view_deltarho350() {
-        assert!(close(fov_deg(36.0, 1050.0), 1.964, 0.002));
-        assert!(close(fov_deg(24.0, 1050.0), 1.310, 0.002));
-    }
-
-    #[test]
-    fn effective_area_and_depth() {
-        let dr = effective_area_m2(350.0, Obstruction::ByDiameter(0.56).area_fraction());
-        let rasa = effective_area_m2(279.0, Obstruction::ByDiameter(114.0 / 279.0).area_fraction());
-        assert!(close(dr, 0.0660, 0.0005));
-        assert!(close(rasa, 0.0509, 0.0005));
-        assert!(close(delta_mag(dr, rasa), 0.28, 0.01));
     }
 
     #[test]
@@ -747,44 +623,5 @@ mod tests {
         let a = Obstruction::ByDiameter(0.49).area_fraction();
         let b = Obstruction::ByArea(0.237).area_fraction();
         assert!(close(a, b, 0.004));
-    }
-
-    #[test]
-    fn critical_focus_zone_values() {
-        assert!(close(critical_focus_zone_um(0.55, 3.0), 12.08, 0.01));
-        assert!(close(critical_focus_zone_um(0.55, 2.2), 6.50, 0.01));
-    }
-
-    #[test]
-    fn ideal_pixel_values() {
-        assert!(close(ideal_pixel_um(2.5, 1050.0), 6.36, 0.01));
-        assert!(close(ideal_pixel_um(2.5, 620.0), 3.76, 0.01));
-    }
-
-    #[test]
-    fn best_bin_choices() {
-        assert_eq!(best_bin(2.0), 1);
-        assert_eq!(best_bin(3.38), 2);
-        assert_eq!(best_bin(8.25), 4);
-    }
-
-    #[test]
-    fn spot_interpolation() {
-        let pts = vec![
-            SpotPoint { field_radius_mm: 0.0, rms_um: 4.9 },
-            SpotPoint { field_radius_mm: 23.0, rms_um: 6.2 },
-            SpotPoint { field_radius_mm: 30.0, rms_um: 7.6 },
-        ];
-        let (mid, ex) = spot_rms_at(&pts, 11.5).unwrap();
-        assert!(close(mid, 5.55, 0.001) && !ex);
-        let (beyond, ex) = spot_rms_at(&pts, 32.0).unwrap();
-        assert!(close(beyond, 8.0, 0.001) && ex);
-    }
-
-    #[test]
-    fn rolling_shutter_skew_imx455() {
-        let skew = 6388.0 * 39.028e-6;
-        assert!(close(skew, 0.2493, 0.0005));
-        assert!(close(SIDEREAL_RATE_ARCSEC_PER_S * skew, 3.75, 0.01));
     }
 }
