@@ -8,7 +8,7 @@
 
 use std::f64::consts::PI;
 
-use crate::constants::{M_PER_KM, PHOTONS_M2_S_MAG0, SUN_APPARENT_MAG};
+use crate::constants::{MAX_EXPOSURE_S, M_PER_KM, PHOTONS_M2_S_MAG0, SUN_APPARENT_MAG};
 
 /// Apparent magnitude of a diffuse (Lambertian) target.
 ///
@@ -43,6 +43,35 @@ pub fn sky_e_per_px_s(
 /// Inverting the SNR equation for a magnitude needs this; see `limiting_mag`.
 pub fn signal_coefficient(eff_area_m2: f64, qe: f64, throughput: f64, exposure_s: f64) -> f64 {
     PHOTONS_M2_S_MAG0 * eff_area_m2 * qe * throughput * exposure_s
+}
+
+/// How far the target moves across the sensor during the exposure, arcsec.
+pub fn trail_arcsec(residual_rate_arcsec_s: f64, exposure_s: f64) -> f64 {
+    residual_rate_arcsec_s * exposure_s
+}
+
+/// Longest exposure that keeps the target's trail inside one seeing disk.
+///
+/// A target the mount holds still has no residual rate and so nothing to
+/// trail, which would imply an unbounded exposure; that case and any
+/// non-positive rate return `MAX_EXPOSURE_S`.
+pub fn trail_limited_exposure_s(seeing_arcsec: f64, residual_rate_arcsec_s: f64) -> f64 {
+    if residual_rate_arcsec_s <= 0.0 {
+        MAX_EXPOSURE_S
+    } else {
+        (seeing_arcsec / residual_rate_arcsec_s).min(MAX_EXPOSURE_S)
+    }
+}
+
+/// Pixels the target's light lands on: a seeing disk smeared along the trail.
+///
+/// Approximated as a rectangle, matching the `(pixels across)^2` footprint
+/// approximation already used by check 5. The ratio between configurations is
+/// what matters, not the absolute pixel count.
+pub fn footprint_px(seeing_arcsec: f64, trail_arcsec: f64, plate_scale: f64) -> f64 {
+    let across = seeing_arcsec / plate_scale;
+    let along = (seeing_arcsec + trail_arcsec) / plate_scale;
+    across * along
 }
 
 #[cfg(test)]
@@ -115,5 +144,66 @@ mod tests {
         let k = signal_coefficient(AREA, QE, THRU, 30.0);
         let s = signal_e_per_s(11.5914, AREA, QE, THRU) * 30.0;
         assert!(close(s / k, 10f64.powf(-0.4 * 11.5914), 1e-12));
+    }
+
+    /// The Moon's rate against the stars: 1,296,000" per sidereal month.
+    const LUNAR_RATE: f64 = 1_296_000.0 / (27.321_661 * 86_400.0);
+
+    #[test]
+    fn lunar_rate_is_half_an_arcsecond_per_second() {
+        assert!(close(LUNAR_RATE, 0.549_017, 0.000_01));
+    }
+
+    #[test]
+    fn trail_limited_exposure_cislunar() {
+        // 2.5" of seeing at 0.549"/s gives 4.554 s before the trail exceeds
+        // one seeing disk.
+        assert!(close(trail_limited_exposure_s(2.5, LUNAR_RATE), 4.5536, 0.001));
+    }
+
+    #[test]
+    fn trail_limited_exposure_caps_a_stationary_target() {
+        // A rate-tracked or stared target does not trail, so nothing bounds
+        // the exposure except the cap.
+        assert!(close(trail_limited_exposure_s(2.5, 0.0), 30.0, 1e-12));
+    }
+
+    #[test]
+    fn trail_limited_exposure_caps_a_very_slow_target() {
+        // 0.001"/s would allow a 2500 s exposure; the cap must still bind.
+        assert!(close(trail_limited_exposure_s(2.5, 0.001), 30.0, 1e-12));
+    }
+
+    #[test]
+    fn trail_limited_exposure_rejects_a_negative_rate() {
+        // Guards against a sign slip in a caller's rate difference.
+        assert!(close(trail_limited_exposure_s(2.5, -1.0), 30.0, 1e-12));
+    }
+
+    #[test]
+    fn trail_equals_seeing_at_the_trail_limited_exposure() {
+        let t = trail_limited_exposure_s(2.5, LUNAR_RATE);
+        assert!(close(trail_arcsec(LUNAR_RATE, t), 2.5, 1e-9));
+    }
+
+    #[test]
+    fn footprint_cislunar() {
+        // 2.5" across, 5.0" long at 0.7386"/px. Equivalently
+        // seeing * (seeing + trail) / scale^2 = 12.5 / 0.545530 = 22.914 px.
+        assert!(close(footprint_px(2.5, 2.5, SCALE), 22.9135, 0.005));
+    }
+
+    #[test]
+    fn footprint_untrailed_is_the_seeing_disk_squared() {
+        let across = 2.5 / SCALE;
+        assert!(close(footprint_px(2.5, 0.0, SCALE), across * across, 1e-9));
+    }
+
+    #[test]
+    fn footprint_grows_with_trail() {
+        let a = footprint_px(2.5, 0.0, SCALE);
+        let b = footprint_px(2.5, 5.0, SCALE);
+        let c = footprint_px(2.5, 50.0, SCALE);
+        assert!(a < b && b < c);
     }
 }
