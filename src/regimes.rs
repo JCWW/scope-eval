@@ -14,7 +14,7 @@ use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
     EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
 };
-use crate::model::{Capability, Config, MountType, Shutter};
+use crate::model::{Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,6 +52,9 @@ pub struct Regime {
     /// Typical along-track uncertainty of the predicted position (e.g. TLE), km. An assumption.
     pub ephemeris_uncertainty_km: f64,
     pub mode: TrackingMode,
+    /// How long the target stays usable per opportunity, seconds. `None` means
+    /// effectively unlimited, so slew time does not compete with the window.
+    pub usable_window_s: Option<f64>,
     /// Whether following the target requires non-sidereal tracking.
     pub needs_non_sidereal: bool,
     /// What usually limits detection in this regime.
@@ -108,6 +111,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: leo_rate,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: Some(300.0),
             needs_non_sidereal: true,
             limiting_factor: "tracking speed, timing and acquisition (targets are usually bright)",
         },
@@ -120,6 +124,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: meo_rate,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: None,
             needs_non_sidereal: true,
             limiting_factor: "brightness and exposure time (moderate rates)",
         },
@@ -132,6 +137,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: 0.0,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::Stare,
+            usable_window_s: None,
             needs_non_sidereal: false,
             limiting_factor: "brightness and search speed (targets are faint and Earth-fixed)",
         },
@@ -144,6 +150,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: (SIDEREAL_RATE_ARCSEC_PER_S - heo_rate).abs(),
             ephemeris_uncertainty_km: 5.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: None,
             needs_non_sidereal: true,
             limiting_factor: "brightness, plus orbit-prediction uncertainty",
         },
@@ -156,6 +163,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: SIDEREAL_RATE_ARCSEC_PER_S - lunar_rate,
             ephemeris_uncertainty_km: 50.0,
             mode: TrackingMode::Sidereal,
+            usable_window_s: None,
             needs_non_sidereal: false,
             limiting_factor: "brightness above all (targets are roughly 10x farther than GEO)",
         },
@@ -167,6 +175,10 @@ pub enum Component {
     Telescope,
     Camera,
     Mount,
+    /// The configuration as a whole. Detection needs collecting area, plate
+    /// scale, quantum efficiency and sky background together, so it cannot be
+    /// attributed to any single component.
+    System,
 }
 
 impl Component {
@@ -175,6 +187,7 @@ impl Component {
             Component::Telescope => "Telescope",
             Component::Camera => "Camera",
             Component::Mount => "Mount",
+            Component::System => "System",
         }
     }
 }
@@ -563,7 +576,12 @@ fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
 }
 
 /// Evaluate one configuration against every regime.
-pub fn evaluate_regimes(cfg: &Config, ev: &Evaluation, seeing: f64, reference_area: Option<f64>) -> Vec<RegimeEvaluation> {
+pub fn evaluate_regimes(
+    cfg: &Config,
+    ev: &Evaluation,
+    site: &Site,
+    reference_area: Option<f64>,
+) -> Vec<RegimeEvaluation> {
     regimes()
         .into_iter()
         .map(|r| {
@@ -573,7 +591,7 @@ pub fn evaluate_regimes(cfg: &Config, ev: &Evaluation, seeing: f64, reference_ar
                 telescope_depth(ev, &r, reference_area),
                 camera_timing(cfg, ev, &r),
                 camera_shutter(cfg, ev, &r),
-                camera_trailing(cfg, ev, &r, seeing),
+                camera_trailing(cfg, ev, &r, site.seeing_arcsec),
                 mount_rate(cfg, &r),
                 mount_non_sidereal(cfg, &r),
             ];
@@ -588,6 +606,23 @@ mod tests {
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn leo_is_the_only_window_constrained_regime() {
+        // LEO passes are over in minutes; everything else is available for
+        // hours, so only LEO grades the slew-and-settle check.
+        for r in regimes() {
+            match r.key {
+                "LEO" => assert_eq!(r.usable_window_s, Some(300.0)),
+                _ => assert_eq!(r.usable_window_s, None, "{} should be unconstrained", r.key),
+            }
+        }
+    }
+
+    #[test]
+    fn system_is_a_component() {
+        assert_eq!(Component::System.name(), "System");
     }
 
     #[test]
