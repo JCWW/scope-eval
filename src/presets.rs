@@ -43,3 +43,22 @@ pub fn cameras() -> Vec<Camera> {
 pub fn mounts() -> Vec<Mount> {
     presets_file().mounts.iter().cloned().map(Into::into).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presets_parse_with_new_fields_absent() {
+        let scopes = telescopes();
+        let cams = cameras();
+        let ms = mounts();
+        assert!(!scopes.is_empty() && !cams.is_empty() && !ms.is_empty());
+        // presets.yaml carries no vendor QE, throughput or dynamics data, and
+        // must not: every value in that file has a `source`.
+        assert!(scopes.iter().all(|t| t.throughput.is_none()));
+        assert!(cams.iter().all(|c| c.qe.is_none()));
+        assert!(ms.iter().all(|m| m.max_accel_deg_s2.is_none()));
+        assert!(ms.iter().all(|m| m.settle_time_s.is_none()));
+    }
+}

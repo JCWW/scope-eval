@@ -29,6 +29,8 @@ pub(crate) struct CameraDto {
     width_px: u32,
     height_px: u32,
     read_noise_e: Option<f64>,
+    #[serde(default)]
+    qe: Option<f64>,
     shutter: ShutterDto,
     weight_lb: Option<f64>,
     source: String,
@@ -42,6 +44,7 @@ impl From<CameraDto> for Camera {
             width_px: dto.width_px,
             height_px: dto.height_px,
             read_noise_e: dto.read_noise_e,
+            qe: dto.qe,
             shutter: dto.shutter.into(),
             weight_lb: dto.weight_lb,
             source: dto.source,

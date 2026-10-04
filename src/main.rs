@@ -6,8 +6,10 @@
 
 mod checks;
 mod constants;
+mod dynamics;
 mod input;
 mod model;
+mod photometry;
 mod presets;
 mod regimes;
 mod report;
@@ -42,8 +44,11 @@ Evaluates a telescope + camera + mount configuration against eight checks:
   1 sensor fit   2 sampling   3 ideal pixel   4 optics vs seeing
   5 area/depth   6 field/search speed   7 focus tolerance   8 practical fit
 
-Then evaluates the telescope, camera and mount separately against five
-orbital regimes: LEO, MEO, GEO, HEO (Molniya) and cislunar.
+Then evaluates the telescope, camera, mount and the configuration as a whole
+against five orbital regimes: LEO, MEO, GEO, HEO (Molniya) and cislunar,
+covering tracking rate, axis acceleration, slew-and-settle timing, timing
+accuracy, shutter skew, acquisition and whether the target is bright enough
+to detect.
 
 USAGE:
   scope-eval            interactive menu
@@ -62,9 +67,16 @@ fn run_interactive() {
     println!("Press Enter to accept a [default]. The first configuration you evaluate");
     println!("becomes the reference for depth and search-speed comparisons.");
 
+    println!("\nSite conditions. Sky brightness is V magnitudes per square arcsecond:");
+    println!("about 21.9 at a dark rural site, 21.0 rural, 18.5 suburban. Larger is darker.");
     let mut site = Site {
-        seeing_arcsec: input::ask_positive("\nTypical seeing FWHM at your site, arcsec", Some(DEFAULT_SEEING_ARCSEC)),
+        seeing_arcsec: input::ask_positive("Typical seeing FWHM at your site, arcsec", Some(DEFAULT_SEEING_ARCSEC)),
         wavelength_um: DEFAULT_WAVELENGTH_UM,
+        sky_mag_arcsec2: input::ask_optional_hint(
+            "Sky brightness, mag/arcsec^2",
+            "blank to assume 21.0 and have detection capped at WARN",
+            false,
+        ),
     };
     let mut configs: Vec<Config> = Vec::new();
 
@@ -73,7 +85,14 @@ fn run_interactive() {
             "Evaluate a telescope + camera configuration".to_string(),
             "Compare all evaluated configurations".to_string(),
             "Show detailed orbital-regime evaluation for a configuration".to_string(),
-            format!("Change site seeing (currently {:.2}\")", site.seeing_arcsec),
+            format!(
+                "Change site conditions (seeing {:.2}\", sky {})",
+                site.seeing_arcsec,
+                match site.sky_mag_arcsec2 {
+                    Some(s) => format!("{s:.2}"),
+                    None => "assumed".to_string(),
+                }
+            ),
             "Show formula summary".to_string(),
             "Remove all configurations and start over".to_string(),
             "Quit".to_string(),
@@ -99,7 +118,16 @@ fn run_interactive() {
             }
             3 => {
                 site.seeing_arcsec = input::ask_positive("New seeing FWHM, arcsec", Some(site.seeing_arcsec));
-                println!("Seeing updated. All configurations will be re-evaluated with the new value.");
+                let answer = input::ask_optional_hint(
+                    "Sky brightness, mag/arcsec^2",
+                    match site.sky_mag_arcsec2 {
+                        Some(_) => "blank to keep the current value",
+                        None => "blank to assume 21.0",
+                    },
+                    false,
+                );
+                site.sky_mag_arcsec2 = input::resolve_keep(answer, site.sky_mag_arcsec2);
+                println!("Site updated. All configurations will be re-evaluated.");
             }
             4 => report::print_formulas(),
             5 => {
@@ -145,6 +173,9 @@ fn build_config() -> Config {
         if m.pointing_rms_arcsec.is_none() {
             m.pointing_rms_arcsec = input::ask_optional("Pointing accuracy after modeling, arcsec RMS", false);
         }
+        if m.max_accel_deg_s2.is_none() {
+            m.max_accel_deg_s2 = input::ask_optional("Maximum axis acceleration, deg/s^2", false);
+        }
         if m.non_sidereal_tracking == Capability::Unknown {
             m.non_sidereal_tracking = ask_capability("Can its software track a satellite from a TLE (non-sidereal)?");
         }
@@ -169,9 +200,30 @@ fn build_config() -> Config {
     println!("0.1 ms or better for GPS hardware timestamping.");
     let timestamp_accuracy_ms = input::ask_positive("Timestamp accuracy, ms", Some(DEFAULT_TIMESTAMP_MS));
 
+    println!("\nDetection inputs. Leave both blank to use values derived per regime:");
+    println!("a 10 m^2 target at 0.2 albedo and full phase, exposed until its trail");
+    println!("reaches one seeing disk (capped at 30 s).");
+    let target_mag_override = input::ask_optional_signed(
+        "Target apparent magnitude",
+        "blank for the derived value; negative is brighter",
+    );
+    let exposure_override_s = input::ask_optional_hint(
+        "Exposure time, s",
+        "blank for the trail-limited value",
+        false,
+    );
+
     let default_label = format!("{} + {}", short_name(&telescope.name), short_name(&camera.name));
     let label = input::ask_text("Label for this configuration", &default_label);
-    Config { label, telescope, camera, payload, timestamp_accuracy_ms }
+    Config {
+        label,
+        telescope,
+        camera,
+        payload,
+        timestamp_accuracy_ms,
+        target_mag_override,
+        exposure_override_s,
+    }
 }
 
 fn ask_capability(prompt: &str) -> Capability {
@@ -198,6 +250,8 @@ fn custom_mount() -> Mount {
         mount_type,
         capacity_lb: input::ask_optional("Rated payload, lb", false),
         max_slew_deg_s: input::ask_optional("Maximum slew rate, deg/s", false),
+        max_accel_deg_s2: input::ask_optional("Maximum axis acceleration, deg/s^2", false),
+        settle_time_s: input::ask_optional_hint("Settle time after a slew, s", "blank to assume 2.0", true),
         pointing_rms_arcsec: input::ask_optional("Pointing accuracy after modeling, arcsec RMS", false),
         non_sidereal_tracking: ask_capability("Can its software track a satellite from a TLE (non-sidereal)?"),
         source: "User-entered".into(),
@@ -239,6 +293,11 @@ fn custom_telescope() -> Telescope {
     let image_circle_mm = input::ask_positive("Corrected image circle diameter, mm", None);
     let back_focus_mm = input::ask_optional("Back focus available, mm", false);
     let weight_lb = input::ask_optional("Optical tube weight, lb", false);
+    let throughput = input::ask_optional_hint(
+        "Optical throughput (fraction, e.g. 0.85)",
+        "blank to assume 0.85",
+        false,
+    );
 
     let spot = if input::ask_yes_no("Enter RMS spot sizes from the spec sheet?", false) {
         let conv = input::ask_menu(
@@ -277,6 +336,7 @@ fn custom_telescope() -> Telescope {
         image_circle_mm,
         back_focus_mm,
         weight_lb,
+        throughput,
         spot,
         source: "User-entered".into(),
     }
@@ -289,6 +349,7 @@ fn custom_camera() -> Camera {
     let width_px = input::ask_count("Sensor width, pixels");
     let height_px = input::ask_count("Sensor height, pixels");
     let read_noise_e = input::ask_optional("Read noise, e- RMS", false);
+    let qe = input::ask_optional_hint("Peak quantum efficiency (fraction, e.g. 0.80)", "blank to assume 0.80", false);
     let shutter = match input::ask_menu(
         "Shutter type?",
         &["Rolling shutter (most CMOS)".to_string(), "Global shutter".to_string()],
@@ -297,12 +358,26 @@ fn custom_camera() -> Camera {
         _ => Shutter::Global,
     };
     let weight_lb = input::ask_optional("Camera weight, lb", false);
-    Camera { name, pixel_um, width_px, height_px, read_noise_e, shutter, weight_lb, source: "User-entered".into() }
+    Camera {
+        name,
+        pixel_um,
+        width_px,
+        height_px,
+        read_noise_e,
+        qe,
+        shutter,
+        weight_lb,
+        source: "User-entered".into(),
+    }
 }
 
 /// Non-interactive comparison of the presets, useful as a worked example.
 fn run_demo() {
-    let site = Site { seeing_arcsec: DEFAULT_SEEING_ARCSEC, wavelength_um: DEFAULT_WAVELENGTH_UM };
+    let site = Site {
+        seeing_arcsec: DEFAULT_SEEING_ARCSEC,
+        wavelength_um: DEFAULT_WAVELENGTH_UM,
+        sky_mag_arcsec2: None,
+    };
     let scopes = presets::telescopes();
     let cams = presets::cameras();
     let find = |s: &str| scopes.iter().find(|t| t.name.contains(s)).unwrap().clone();
@@ -319,52 +394,28 @@ fn run_demo() {
     };
     let payload = |m: Mount, acc: f64| Payload { mount: Some(m), accessories_lb: acc, back_focus_required_mm: None };
 
+    let cfg = |label: &str, telescope: Telescope, camera: Camera, payload: Payload| Config {
+        label: label.into(),
+        telescope,
+        camera,
+        payload,
+        timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
+        target_mag_override: None,
+        exposure_override_s: None,
+    };
+
     let configs = vec![
-        Config {
-            label: "DeltaRho 350 + IMX455".into(),
-            telescope: find("DeltaRho 350"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-350"), 10.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "RASA 11 + IMX455".into(),
-            telescope: find("RASA 11"),
-            camera: imx455.clone(),
-            payload: payload(mount("HAE69"), 5.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "CDK14 + IMX455".into(),
-            telescope: find("CDK14"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-350"), 10.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "CDK17 + IMX455".into(),
-            telescope: find("CDK17"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-500"), 15.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "DeltaRho 500 + IMX461".into(),
-            telescope: find("DeltaRho 500"),
-            camera: imx461,
-            payload: payload(mount("L-500"), 15.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "RASA 11 + IMX174 (global)".into(),
-            telescope: find("RASA 11"),
-            camera: imx174,
-            payload: payload(mount("L-350"), 5.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
+        cfg("DeltaRho 350 + IMX455", find("DeltaRho 350"), imx455.clone(), payload(mount("L-350"), 10.0)),
+        cfg("RASA 11 + IMX455", find("RASA 11"), imx455.clone(), payload(mount("HAE69"), 5.0)),
+        cfg("CDK14 + IMX455", find("CDK14"), imx455.clone(), payload(mount("L-350"), 10.0)),
+        cfg("CDK17 + IMX455", find("CDK17"), imx455.clone(), payload(mount("L-500"), 15.0)),
+        cfg("DeltaRho 500 + IMX461", find("DeltaRho 500"), imx461, payload(mount("L-500"), 15.0)),
+        cfg("RASA 11 + IMX174 (global)", find("RASA 11"), imx174, payload(mount("L-350"), 5.0)),
     ];
 
     println!("scope-eval demo: built-in presets, seeing {:.1}\"", site.seeing_arcsec);
+    println!("No QE, throughput, sky brightness or mount dynamics are entered, so");
+    println!("detection is capped at WARN throughout. That is the point of the demo.");
     let evals = checks::evaluate_all(&configs, &site);
     for (cfg, ev) in configs.iter().zip(evals.iter()) {
         report::print_evaluation(cfg, ev, &site);

@@ -7,6 +7,9 @@
 # shutter: one of `!rolling { line_time_us: <float or null> }` or `global`.
 # mount_type: one of `alt_az`, `equatorial`, `unknown`.
 # non_sidereal_tracking: `true`, `false`, or omit/null if not known.
+# throughput: optical throughput 0..1, or omit/null if not measured.
+# qe: peak quantum efficiency 0..1, or omit/null if not entered.
+# max_accel_deg_s2, settle_time_s: mount dynamics, or omit/null if not published.
 
 telescopes:
   - name: "PlaneWave DeltaRho 350 (14\" f/3)"
@@ -16,6 +19,7 @@ telescopes:
     image_circle_mm: 60.0
     back_focus_mm: 143.5
     weight_lb: 46.0
+    throughput: null
     spot:
       convention: unknown
       points:
@@ -34,6 +38,7 @@ telescopes:
     image_circle_mm: 70.0
     back_focus_mm: 232.8
     weight_lb: 165.0
+    throughput: null
     spot: null
     source: "PlaneWave spec sheet. No spot data entered."
 
@@ -44,6 +49,7 @@ telescopes:
     image_circle_mm: 52.0
     back_focus_mm: 282.0
     weight_lb: 48.0
+    throughput: null
     spot:
       convention: unknown
       points:
@@ -60,6 +66,7 @@ telescopes:
     image_circle_mm: 70.0
     back_focus_mm: 260.0
     weight_lb: null
+    throughput: null
     spot: null
     source: "PlaneWave Europe spec sheet (49% by diameter = 23.7% by area). OTA weight not entered."
 
@@ -70,6 +77,7 @@ telescopes:
     image_circle_mm: 43.3
     back_focus_mm: 72.8
     weight_lb: 43.0
+    throughput: null
     spot: null
     source: "Celestron/dealer listings. 114 mm obstruction on a 279 mm aperture. The camera sits in front of the aperture, so a large camera body adds obstruction. Weight listings vary (35 to 43 lb). 43 lb is used."
 
@@ -79,6 +87,7 @@ cameras:
     width_px: 9576
     height_px: 6388
     read_noise_e: null
+    qe: null
     shutter: !rolling { line_time_us: 39.028 }
     weight_lb: 2.0
     source: "Line time from the Moravian C3 manual. Weight from QHY600 PRO (915 g). Rolling shutter."
@@ -88,6 +97,7 @@ cameras:
     width_px: 6252
     height_px: 4176
     read_noise_e: null
+    qe: null
     shutter: !rolling { line_time_us: 34.667 }
     weight_lb: null
     source: "Line time from the Moravian C3 manual. Weight not entered."
@@ -97,6 +107,7 @@ cameras:
     width_px: 11664
     height_px: 8750
     read_noise_e: null
+    qe: null
     shutter: !rolling { line_time_us: null }
     weight_lb: null
     source: "Nominal sensor format. Exact active pixel count varies by camera vendor. Line time and weight not entered."
@@ -106,6 +117,7 @@ cameras:
     width_px: 1936
     height_px: 1216
     read_noise_e: null
+    qe: null
     shutter: global
     weight_lb: null
     source: "Nominal sensor format. Small global-shutter sensor often used for LEO timing work."
@@ -115,22 +127,28 @@ mounts:
     mount_type: alt_az
     capacity_lb: 100.0
     max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
     pointing_rms_arcsec: null
     non_sidereal_tracking: null
-    source: "PlaneWave listing: 100 lb payload, 50 deg/s slew, alt-az (equatorial with wedge). Pointing accuracy and TLE tracking not entered: confirm with the vendor."
+    source: "PlaneWave listing: 100 lb payload, 50 deg/s slew, alt-az (equatorial with wedge). Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
 
   - name: "PlaneWave L-500 (direct drive)"
     mount_type: alt_az
     capacity_lb: 200.0
     max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
     pointing_rms_arcsec: null
     non_sidereal_tracking: null
-    source: "PlaneWave listing: 200 lb payload, 50 deg/s slew, alt-az or equatorial. Pointing accuracy and TLE tracking not entered: confirm with the vendor."
+    source: "PlaneWave listing: 200 lb payload, 50 deg/s slew, alt-az or equatorial. Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
 
   - name: "iOptron HAE69C-EC (strain-wave)"
     mount_type: equatorial
     capacity_lb: 69.0
     max_slew_deg_s: null
+    max_accel_deg_s2: null
+    settle_time_s: null
     pointing_rms_arcsec: null
     non_sidereal_tracking: null
-    source: "iOptron listing: 69 lb without counterweight (79 lb with). Can run alt-az or equatorial, entered as equatorial. Slew rate, pointing and TLE tracking not entered."
+    source: "iOptron listing: 69 lb without counterweight (79 lb with). Can run alt-az or equatorial, entered as equatorial. Slew rate, pointing, TLE tracking, axis acceleration and settle time not entered."

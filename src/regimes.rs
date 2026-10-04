@@ -12,9 +12,13 @@
 use crate::checks::{kv, Evaluation, Status};
 use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
+    DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2, S_PER_US,
+    SIDEREAL_RATE_ARCSEC_PER_S,
 };
-use crate::model::{Capability, Config, MountType, Shutter};
+use crate::constants::plausible_ranges as ranges;
+use crate::dynamics;
+use crate::photometry::{self, Photometry};
+use crate::model::{plausible, Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,6 +56,9 @@ pub struct Regime {
     /// Typical along-track uncertainty of the predicted position (e.g. TLE), km. An assumption.
     pub ephemeris_uncertainty_km: f64,
     pub mode: TrackingMode,
+    /// How long the target stays usable per opportunity, seconds. `None` means
+    /// effectively unlimited, so slew time does not compete with the window.
+    pub usable_window_s: Option<f64>,
     /// Whether following the target requires non-sidereal tracking.
     pub needs_non_sidereal: bool,
     /// What usually limits detection in this regime.
@@ -108,6 +115,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: leo_rate,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: Some(300.0),
             needs_non_sidereal: true,
             limiting_factor: "tracking speed, timing and acquisition (targets are usually bright)",
         },
@@ -120,6 +128,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: meo_rate,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: None,
             needs_non_sidereal: true,
             limiting_factor: "brightness and exposure time (moderate rates)",
         },
@@ -132,6 +141,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: 0.0,
             ephemeris_uncertainty_km: 2.0,
             mode: TrackingMode::Stare,
+            usable_window_s: None,
             needs_non_sidereal: false,
             limiting_factor: "brightness and search speed (targets are faint and Earth-fixed)",
         },
@@ -144,6 +154,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: (SIDEREAL_RATE_ARCSEC_PER_S - heo_rate).abs(),
             ephemeris_uncertainty_km: 5.0,
             mode: TrackingMode::RateTrack,
+            usable_window_s: None,
             needs_non_sidereal: true,
             limiting_factor: "brightness, plus orbit-prediction uncertainty",
         },
@@ -156,6 +167,7 @@ pub fn regimes() -> Vec<Regime> {
             rate_vs_ground: SIDEREAL_RATE_ARCSEC_PER_S - lunar_rate,
             ephemeris_uncertainty_km: 50.0,
             mode: TrackingMode::Sidereal,
+            usable_window_s: None,
             needs_non_sidereal: false,
             limiting_factor: "brightness above all (targets are roughly 10x farther than GEO)",
         },
@@ -167,6 +179,10 @@ pub enum Component {
     Telescope,
     Camera,
     Mount,
+    /// The configuration as a whole. Detection needs collecting area, plate
+    /// scale, quantum efficiency and sky background together, so it cannot be
+    /// attributed to any single component.
+    System,
 }
 
 impl Component {
@@ -175,6 +191,7 @@ impl Component {
             Component::Telescope => "Telescope",
             Component::Camera => "Camera",
             Component::Mount => "Mount",
+            Component::System => "System",
         }
     }
 }
@@ -471,7 +488,8 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
             verdict: "No mount selected.".to_string(),
         };
     };
-    let Some(max) = m.max_slew_deg_s else {
+    let Some(max) = plausible(m.max_slew_deg_s, ranges::SLEW_RATE_MIN_DEG_S, ranges::SLEW_RATE_MAX_DEG_S)
+    else {
         let status = if required_deg_s > limits::RATE_MATTERS_DEG_S { Status::Warn } else { Status::Info };
         return RegimeCheck {
             component: Component::Mount,
@@ -499,12 +517,22 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
 
     match m.mount_type {
         MountType::AltAz => {
-            // Near the zenith the azimuth rate is about omega / (zenith distance in radians).
+            // Near the zenith the azimuth axis must sweep through the same
+            // atan form as the pass itself, so both the rate and the
+            // acceleration limits constrain the same keyhole. Report whichever
+            // binds; with acceleration unknown that is the rate limit, which
+            // is what this check reported before acceleration was modelled.
             let omega_rad = required_deg_s.to_radians();
-            let max_rad = max.to_radians();
-            let z_min_deg = (omega_rad / max_rad).to_degrees();
-            let elev = 90.0 - z_min_deg;
+            let accel_rad = plausible(
+                m.max_accel_deg_s2,
+                ranges::ACCEL_MIN_DEG_S2,
+                ranges::ACCEL_MAX_DEG_S2,
+            )
+            .map(f64::to_radians);
+            let (z_min_rad, binding) = dynamics::keyhole_rad(omega_rad, max.to_radians(), accel_rad);
+            let elev = 90.0 - z_min_rad.to_degrees();
             details.push(kv("Highest pass followable (alt-az keyhole)", format!("{elev:.1} deg elevation")));
+            details.push(kv("Keyhole set by", format!("{binding} limit")));
             let k = if elev >= limits::KEYHOLE_PASS_ELEV_DEG {
                 Status::Pass
             } else if elev >= limits::KEYHOLE_WARN_ELEV_DEG {
@@ -526,6 +554,150 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
         MountType::Unknown => details.push(kv("Keyhole", "mount type unknown".to_string())),
     }
     RegimeCheck { component: Component::Mount, title: "Tracking rate", status, details, verdict }
+}
+
+/// Can the mount accelerate fast enough to follow the pass?
+fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
+    let title = "Acceleration";
+    let omega_rad_s = r.rate_vs_ground / ARCSEC_PER_RADIAN;
+    let required = dynamics::peak_tracking_accel_rad_s2(omega_rad_s) * DEG_PER_RADIAN;
+    let mut details = vec![kv("Required peak acceleration", format!("{required:.5} deg/s^2"))];
+
+    if r.mode == TrackingMode::Stare {
+        details.push(kv("Mode", "stare: tracking off".to_string()));
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Pass,
+            details,
+            verdict: "The target is Earth-fixed. The mount never has to accelerate to follow it."
+                .to_string(),
+        };
+    }
+
+    let Some(m) = cfg.payload.mount.as_ref() else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: "No mount selected.".to_string(),
+        };
+    };
+
+    let Some(max) = plausible(m.max_accel_deg_s2, ranges::ACCEL_MIN_DEG_S2, ranges::ACCEL_MAX_DEG_S2)
+    else {
+        let status = if required > limits::ACCEL_MATTERS_DEG_S2 { Status::Warn } else { Status::Info };
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status,
+            details,
+            verdict: format!("Maximum axis acceleration for {} is unknown. Ask the vendor.", m.name),
+        };
+    };
+
+    let headroom = max / required;
+    details.push(kv("Mount maximum acceleration", format!("{max:.3} deg/s^2  (headroom {headroom:.0}x)")));
+    let status = if headroom >= limits::ACCEL_PASS_HEADROOM {
+        Status::Pass
+    } else if headroom >= limits::ACCEL_WARN_HEADROOM {
+        Status::Warn
+    } else {
+        Status::Fail
+    };
+    let verdict = match status {
+        Status::Pass => "Ample acceleration headroom.".to_string(),
+        Status::Warn => "The mount can just accelerate fast enough, with little margin for corrections.".to_string(),
+        _ => "The mount cannot accelerate fast enough to follow the pass.".to_string(),
+    };
+    RegimeCheck { component: Component::Mount, title, status, details, verdict }
+}
+
+/// Can the mount get on target in time to use the pass?
+fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
+    let title = "Slew and settle";
+    let Some(window) = r.usable_window_s else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details: vec![kv("Usable window", "effectively unlimited".to_string())],
+            verdict: "The target stays available long enough that slew time does not compete with it."
+                .to_string(),
+        };
+    };
+    let mut details = vec![
+        kv("Usable window", format!("{window:.0} s")),
+        kv("Assumed slew distance", format!("{:.0} deg", DEFAULT_SLEW_DISTANCE_DEG)),
+    ];
+    let Some(m) = cfg.payload.mount.as_ref() else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: "No mount selected.".to_string(),
+        };
+    };
+    let rate = plausible(m.max_slew_deg_s, ranges::SLEW_RATE_MIN_DEG_S, ranges::SLEW_RATE_MAX_DEG_S);
+    let accel = plausible(m.max_accel_deg_s2, ranges::ACCEL_MIN_DEG_S2, ranges::ACCEL_MAX_DEG_S2);
+
+    match (rate, accel) {
+        (Some(v), Some(a)) => {
+            let entered = plausible(m.settle_time_s, ranges::SETTLE_MIN_S, ranges::SETTLE_MAX_S);
+            let settle = entered.unwrap_or(DEFAULT_SETTLE_TIME_S);
+            details.push(kv(
+                "Settle time",
+                match entered {
+                    Some(_) => format!("{settle:.1} s"),
+                    None => format!("{settle:.1} s (assumed)"),
+                },
+            ));
+            let slew = dynamics::slew_time_s(DEFAULT_SLEW_DISTANCE_DEG, v, a);
+            let total = slew + settle;
+            let fraction = total / window;
+            details.push(kv("Slew time", format!("{slew:.1} s")));
+            details.push(kv(
+                "Slew + settle",
+                format!("{total:.1} s  ({:.0}% of the window)", fraction * 100.0),
+            ));
+            let status = if fraction <= limits::SLEW_PASS_WINDOW_FRACTION {
+                Status::Pass
+            } else if fraction <= limits::SLEW_WARN_WINDOW_FRACTION {
+                Status::Warn
+            } else {
+                Status::Fail
+            };
+            let verdict = match status {
+                Status::Pass => "The mount is on target well inside the window.".to_string(),
+                Status::Warn => "Getting on target eats a significant part of the window.".to_string(),
+                _ => "The mount cannot get on target in time to make use of the pass.".to_string(),
+            };
+            RegimeCheck { component: Component::Mount, title, status, details, verdict }
+        }
+        (Some(v), None) => {
+            let floor = DEFAULT_SLEW_DISTANCE_DEG / v;
+            details.push(kv("Slew time", format!("at least {floor:.1} s, ignoring ramp-up")));
+            RegimeCheck {
+                component: Component::Mount,
+                title,
+                status: Status::Info,
+                details,
+                verdict: format!(
+                    "Axis acceleration for {} is unknown, so this is a lower bound only. Ask the vendor.",
+                    m.name
+                ),
+            }
+        }
+        _ => RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: format!("Maximum slew rate for {} is unknown. Ask the vendor.", m.name),
+        },
+    }
 }
 
 /// Can the control software follow a predicted path?
@@ -562,8 +734,127 @@ fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
     RegimeCheck { component: Component::Mount, title: "Non-sidereal tracking", status, details, verdict }
 }
 
+// ---------------------------------------------------------------------------
+// System checks
+// ---------------------------------------------------------------------------
+
+/// How fast the target moves across the sensor, arcsec/s, given how it is tracked.
+///
+/// A rate-tracked target is held still by the mount, and an Earth-fixed target
+/// in stare mode is still by definition; the stars are what trail in both
+/// cases. Under sidereal tracking it is the other way round: the target drifts
+/// against the tracked stars at its rate against them.
+fn residual_rate_arcsec_s(r: &Regime) -> f64 {
+    match r.mode {
+        TrackingMode::RateTrack | TrackingMode::Stare => 0.0,
+        TrackingMode::Sidereal => r.rate_vs_stars,
+    }
+}
+
+/// Is the target bright enough for this configuration to detect?
+fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
+    let title = "Detection";
+    let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
+    let (target_mag, mag_from) = match cfg.target_mag_override {
+        Some(m) => (m, "entered"),
+        None => (
+            photometry::derived_target_mag(
+                REFERENCE_TARGET_CROSS_SECTION_M2,
+                REFERENCE_TARGET_ALBEDO,
+                r.range_km,
+                DEFAULT_PHASE_FACTOR,
+            ),
+            "derived",
+        ),
+    };
+    let residual = residual_rate_arcsec_s(r);
+    let (exposure, exp_from) = match cfg.exposure_override_s {
+        Some(t) => (t, "entered"),
+        None => (photometry::trail_limited_exposure_s(site.seeing_arcsec, residual), "derived"),
+    };
+
+    let scale = ev.metrics.plate_scale;
+    let area = ev.metrics.effective_area_m2;
+    let trail = photometry::trail_arcsec(residual, exposure);
+    let n_px = photometry::footprint_px(site.seeing_arcsec, trail, scale);
+    let signal = photometry::signal_e_per_s(target_mag, area, p.qe, p.throughput) * exposure;
+    let sky = photometry::sky_e_per_px_s(p.sky_mag_arcsec2, scale, area, p.qe, p.throughput)
+        * exposure
+        * n_px;
+    let snr = photometry::snr(signal, sky, p.read_noise_e, n_px);
+    let noise_variance = sky + p.read_noise_e * p.read_noise_e * n_px;
+    let m_limit = photometry::limiting_mag(
+        limits::DETECT_SNR_THRESHOLD,
+        noise_variance,
+        photometry::signal_coefficient(area, p.qe, p.throughput, exposure),
+    );
+
+    let mut details = vec![
+        kv("Target magnitude", format!("{target_mag:.2} ({mag_from})")),
+        kv("Exposure", format!("{exposure:.3} s ({exp_from})")),
+        kv("Trail", format!("{trail:.2}\" ({:.1} px)", trail / scale)),
+        kv("Footprint", format!("{n_px:.1} px")),
+        kv("Signal / sky", format!("{signal:.0} e- / {sky:.0} e-")),
+        kv("SNR", format!("{snr:.1}")),
+        kv("Limiting magnitude", format!("{m_limit:.2}")),
+        kv("Margin", format!("{:+.2} mag", m_limit - target_mag)),
+    ];
+
+    let trivial = snr >= limits::SNR_TRIVIAL;
+    let mut status = if snr >= limits::SNR_PASS {
+        Status::Pass
+    } else if snr >= limits::DETECT_SNR_THRESHOLD {
+        Status::Warn
+    } else {
+        Status::Fail
+    };
+    let mut verdict = if trivial {
+        format!(
+            "Detection is not the limiting factor here, so choose exposure for saturation and timing instead. What limits this regime is {}.",
+            r.limiting_factor
+        )
+    } else if status == Status::Pass {
+        format!("Detectable with margin: SNR {snr:.0} against a threshold of {:.0}.", limits::DETECT_SNR_THRESHOLD)
+    } else if status == Status::Warn {
+        "Marginal: detectable, but close enough to the threshold that conditions will decide it.".to_string()
+    } else {
+        "Too faint to detect in this configuration.".to_string()
+    };
+
+    // None of the above means anything if the target left the sensor.
+    let short_side_arcsec = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE;
+    if trail > short_side_arcsec {
+        details.push(kv("Trail vs field", "longer than the short side of the field".to_string()));
+        verdict.push_str(" The trail is longer than the field, so the target streaks off the sensor during the exposure: shorten it.");
+        if status == Status::Pass {
+            status = Status::Warn;
+        }
+    }
+
+    // Never claim a PASS on numbers the user did not supply. Checked against
+    // Pass explicitly: Status is ordered Info < Pass < Warn < Fail, so a
+    // `.max(Warn)` here would also promote an Info.
+    if p.any_assumed() {
+        details.push(kv("Assumed inputs", p.assumed.join(", ")));
+        if status == Status::Pass {
+            status = Status::Warn;
+            verdict.push_str(&format!(
+                " Not graded PASS because these were assumed rather than entered: {}.",
+                p.assumed.join(", ")
+            ));
+        }
+    }
+
+    RegimeCheck { component: Component::System, title, status, details, verdict }
+}
+
 /// Evaluate one configuration against every regime.
-pub fn evaluate_regimes(cfg: &Config, ev: &Evaluation, seeing: f64, reference_area: Option<f64>) -> Vec<RegimeEvaluation> {
+pub fn evaluate_regimes(
+    cfg: &Config,
+    ev: &Evaluation,
+    site: &Site,
+    reference_area: Option<f64>,
+) -> Vec<RegimeEvaluation> {
     regimes()
         .into_iter()
         .map(|r| {
@@ -573,9 +864,12 @@ pub fn evaluate_regimes(cfg: &Config, ev: &Evaluation, seeing: f64, reference_ar
                 telescope_depth(ev, &r, reference_area),
                 camera_timing(cfg, ev, &r),
                 camera_shutter(cfg, ev, &r),
-                camera_trailing(cfg, ev, &r, seeing),
+                camera_trailing(cfg, ev, &r, site.seeing_arcsec),
                 mount_rate(cfg, &r),
+                mount_acceleration(cfg, &r),
+                mount_slew_settle(cfg, &r),
                 mount_non_sidereal(cfg, &r),
+                system_detection(cfg, ev, &r, site),
             ];
             RegimeEvaluation { regime: r, checks }
         })
@@ -588,6 +882,394 @@ mod tests {
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    // Site arrives via `use super::*`; Mount and Payload are not imported at
+    // module level and the fixtures need both (pre-flight ruling).
+    use crate::model::{Mount, Payload};
+
+    /// DeltaRho 350 + IMX455 on an L-350, the configuration every worked
+    /// example in README.md uses.
+    fn fixture(mount: Option<Mount>) -> (Config, Site) {
+        let telescope = crate::presets::telescopes()
+            .into_iter()
+            .find(|t| t.name.contains("DeltaRho 350"))
+            .expect("DeltaRho 350 preset");
+        let camera = crate::presets::cameras()
+            .into_iter()
+            .find(|c| c.name.contains("IMX455"))
+            .expect("IMX455 preset");
+        let cfg = Config {
+            label: "fixture".into(),
+            telescope,
+            camera,
+            payload: Payload { mount, accessories_lb: 10.0, back_focus_required_mm: None },
+            timestamp_accuracy_ms: 0.1,
+            target_mag_override: None,
+            exposure_override_s: None,
+        };
+        let site = Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None };
+        (cfg, site)
+    }
+
+    fn l350(max_accel_deg_s2: Option<f64>) -> Mount {
+        Mount {
+            name: "L-350".into(),
+            mount_type: MountType::AltAz,
+            capacity_lb: Some(100.0),
+            max_slew_deg_s: Some(50.0),
+            max_accel_deg_s2,
+            settle_time_s: None,
+            pointing_rms_arcsec: Some(30.0),
+            non_sidereal_tracking: Capability::Yes,
+            source: "test".into(),
+        }
+    }
+
+    /// The named check for one regime of one configuration.
+    fn check_for(key: &str, title: &str, cfg: &Config, site: &Site) -> RegimeCheck {
+        let ev = crate::checks::evaluate(cfg, site, None);
+        ev.regimes
+            .iter()
+            .find(|r| r.regime.key == key)
+            .unwrap_or_else(|| panic!("no regime {key}"))
+            .checks
+            .iter()
+            .find(|c| c.title == title)
+            .unwrap_or_else(|| panic!("no check {title} in regime {key}"))
+            .clone()
+    }
+
+    #[test]
+    fn acceleration_passes_with_a_known_rating() {
+        // LEO needs 0.0086 deg/s^2; 10 deg/s^2 is over a thousand times that.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn acceleration_fails_a_mount_that_cannot_keep_up() {
+        let (cfg, site) = fixture(Some(l350(Some(0.004))));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn acceleration_warns_when_the_rating_is_unknown_and_leo_needs_it() {
+        // 0.008627 deg/s^2 is above ACCEL_MATTERS_DEG_S2, so an unknown
+        // rating is a question for the vendor rather than a non-issue.
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.verdict.contains("unknown"));
+    }
+
+    #[test]
+    fn acceleration_is_info_when_the_rating_is_unknown_and_irrelevant() {
+        // MEO needs 1.4e-6 deg/s^2. Nobody needs to ask the vendor about that.
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("MEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+    }
+
+    #[test]
+    fn acceleration_passes_in_stare_mode() {
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("GEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn acceleration_treats_a_nonsense_rating_as_unknown() {
+        // Review Focus 2: a zero, negative or NaN rating in presets.yaml must
+        // not become an unfollowable mount.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let (cfg, site) = fixture(Some(l350(Some(bad))));
+            let c = check_for("LEO", "Acceleration", &cfg, &site);
+            assert_eq!(c.status, Status::Warn, "rating {bad} was trusted");
+            assert!(c.verdict.contains("unknown"), "rating {bad} was trusted");
+        }
+    }
+
+    #[test]
+    fn slew_and_settle_passes_a_direct_drive_mount_on_leo() {
+        // 90 deg at 50 deg/s and 10 deg/s^2 is 6.0 s, plus 2 s of assumed
+        // settle: 8 s of a 300 s window, under 3%.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn slew_and_settle_fails_a_mount_that_cannot_get_there_in_time() {
+        let mut m = l350(Some(0.05));
+        m.max_slew_deg_s = Some(1.0);
+        let (cfg, site) = fixture(Some(m));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn slew_and_settle_is_info_where_the_window_is_unlimited() {
+        for key in ["MEO", "GEO", "HEO", "CIS"] {
+            let (cfg, site) = fixture(Some(l350(Some(10.0))));
+            let c = check_for(key, "Slew and settle", &cfg, &site);
+            assert_eq!(c.status, Status::Info, "{key} should not be window-constrained");
+        }
+    }
+
+    #[test]
+    fn slew_and_settle_reports_a_lower_bound_when_acceleration_is_unknown() {
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+        assert!(c.verdict.contains("lower bound"));
+    }
+
+    #[test]
+    fn slew_and_settle_names_the_settle_time_as_assumed() {
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("assumed")));
+    }
+
+    #[test]
+    fn slew_and_settle_uses_an_entered_settle_time() {
+        let mut m = l350(Some(10.0));
+        m.settle_time_s = Some(45.0);
+        let (cfg, site) = fixture(Some(m));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        // 6 s of slew plus 45 s of settle is 17% of a 300 s window: a WARN.
+        assert_eq!(c.status, Status::Warn);
+    }
+
+    #[test]
+    fn slew_and_settle_is_info_with_no_mount() {
+        let (cfg, site) = fixture(None);
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+    }
+
+    /// The keyhole elevation a check reported, parsed back out of its details.
+    fn keyhole_elev(cfg: &Config, site: &Site) -> f64 {
+        let c = check_for("LEO", "Tracking rate", cfg, site);
+        let line = c
+            .details
+            .iter()
+            .find(|d| d.contains("keyhole"))
+            .expect("keyhole detail");
+        line.split_whitespace()
+            .find_map(|w| w.parse::<f64>().ok())
+            .expect("a number in the keyhole detail")
+    }
+
+    #[test]
+    fn keyhole_unchanged_when_acceleration_is_unknown() {
+        // The guarantee: 0.87234 deg/s against a 50 deg/s axis gives a 1.0 deg
+        // keyhole, so 89.0 deg of elevation -- exactly what this tool reported
+        // before acceleration was modelled.
+        let (cfg, site) = fixture(Some(l350(None)));
+        assert!(close(keyhole_elev(&cfg, &site), 89.0, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("rate limit")));
+    }
+
+    #[test]
+    fn keyhole_unchanged_when_acceleration_is_nonsense() {
+        for bad in [0.0, -5.0, f64::NAN] {
+            let (cfg, site) = fixture(Some(l350(Some(bad))));
+            assert!(close(keyhole_elev(&cfg, &site), 89.0, 0.05), "rating {bad} moved the keyhole");
+        }
+    }
+
+    #[test]
+    fn tracking_rate_treats_a_nonsense_slew_rate_as_unknown() {
+        // A 0.0 or NaN max_slew_deg_s in presets.yaml must not become a
+        // confident FAIL with "-inf deg elevation" in it. mount_slew_settle
+        // already filters this field; mount_rate must too.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let mut m = l350(Some(10.0));
+            m.max_slew_deg_s = Some(bad);
+            let (cfg, site) = fixture(Some(m));
+            let c = check_for("LEO", "Tracking rate", &cfg, &site);
+            assert!(c.verdict.contains("unknown"), "slew rate {bad} was trusted: {}", c.verdict);
+            assert!(
+                !c.details.iter().any(|d| d.contains("inf") || d.contains("NaN")),
+                "slew rate {bad} leaked a non-finite figure into the report: {:?}",
+                c.details
+            );
+        }
+    }
+
+    #[test]
+    fn keyhole_tightens_when_acceleration_is_known() {
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        assert!(close(keyhole_elev(&cfg, &site), 88.32, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("acceleration limit")));
+    }
+
+    #[test]
+    fn a_low_acceleration_rating_warns_on_the_keyhole() {
+        // 0.5 deg/s^2 pushes the keyhole to 82.5 deg, below
+        // KEYHOLE_WARN_ELEV_DEG, so the check can no longer pass.
+        let (cfg, site) = fixture(Some(l350(Some(0.5))));
+        assert!(close(keyhole_elev(&cfg, &site), 82.48, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.status >= Status::Warn);
+    }
+
+    fn detection(key: &str, cfg: &Config, site: &Site) -> RegimeCheck {
+        check_for(key, "Detection", cfg, site)
+    }
+
+    /// A fixture with every photometric input entered, so nothing is capped.
+    fn fully_specified() -> (Config, Site) {
+        let (mut cfg, mut site) = fixture(Some(l350(Some(10.0))));
+        cfg.telescope.throughput = Some(0.85);
+        cfg.camera.qe = Some(0.80);
+        cfg.camera.read_noise_e = Some(3.0);
+        site.sky_mag_arcsec2 = Some(21.0);
+        (cfg, site)
+    }
+
+    /// A numeric value out of a named detail line.
+    fn detail_number(c: &RegimeCheck, label: &str) -> f64 {
+        let line = c
+            .details
+            .iter()
+            .find(|d| d.contains(label))
+            .unwrap_or_else(|| panic!("no detail {label}"));
+        line.split_whitespace()
+            .find_map(|w| w.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("no number in detail {label}"))
+    }
+
+    #[test]
+    fn residual_rate_follows_the_tracking_mode() {
+        for r in regimes() {
+            let residual = residual_rate_arcsec_s(&r);
+            match r.mode {
+                // The mount holds a rate-tracked or stared target still.
+                TrackingMode::RateTrack | TrackingMode::Stare => {
+                    assert!(close(residual, 0.0, 1e-12), "{} should not trail", r.key)
+                }
+                // Under sidereal tracking the target drifts against the stars.
+                TrackingMode::Sidereal => assert!(close(residual, r.rate_vs_stars, 1e-12)),
+            }
+        }
+    }
+
+    #[test]
+    fn detection_caps_at_warn_when_inputs_are_assumed() {
+        // Every preset carries null QE, throughput and read noise, and the
+        // fixture's site carries no sky brightness, so nothing here is
+        // entered. GEO would otherwise grade PASS on SNR 526.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.details.iter().any(|d| d.contains("quantum efficiency")));
+        assert!(c.verdict.contains("assumed"));
+    }
+
+    #[test]
+    fn detection_passes_when_every_input_is_entered() {
+        let (cfg, site) = fully_specified();
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+        assert!(!c.verdict.contains("assumed"));
+    }
+
+    #[test]
+    fn detection_fail_is_not_changed_by_cap() {
+        // The cap must be an `== Pass` test, not `.max(Warn)`: a FAIL stays a
+        // FAIL whether or not inputs were assumed. Replaces the spec's
+        // Info-based test, since the detection check has no Info path.
+        let (mut cfg, site) = fixture(Some(l350(Some(10.0))));
+        cfg.target_mag_override = Some(30.0); // far beyond any limit
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn cislunar_is_the_only_regime_detection_actually_grades() {
+        // Every regime nearer than the Moon exceeds SNR_TRIVIAL on a 14-inch
+        // at 30 s, which is the point: brightness is not what limits them.
+        let (cfg, site) = fully_specified();
+        for key in ["LEO", "MEO", "GEO", "HEO"] {
+            let c = detection(key, &cfg, &site);
+            assert!(
+                c.verdict.contains("not the limiting factor"),
+                "{key} should be trivially detectable"
+            );
+        }
+        let cis = detection("CIS", &cfg, &site);
+        assert!(!cis.verdict.contains("not the limiting factor"));
+        assert_eq!(cis.status, Status::Pass);
+    }
+
+    #[test]
+    fn stationary_regimes_share_a_limiting_magnitude() {
+        // LEO, MEO, GEO and HEO all hold the target still, so they share an
+        // exposure, a zero trail, a footprint and a noise budget, and
+        // therefore a limiting magnitude of 20.06. They differ only in target
+        // magnitude. A guard against the noise terms picking up a spurious
+        // range dependence.
+        let (cfg, site) = fully_specified();
+        let leo = detail_number(&detection("LEO", &cfg, &site), "Limiting magnitude");
+        assert!(close(leo, 20.06, 0.02), "LEO limiting magnitude {leo}");
+        for key in ["MEO", "GEO", "HEO"] {
+            let m = detail_number(&detection(key, &cfg, &site), "Limiting magnitude");
+            assert!(close(m, leo, 0.001), "{key} limiting magnitude {m} differs from LEO {leo}");
+        }
+    }
+
+    #[test]
+    fn detection_warns_when_the_trail_runs_off_the_sensor() {
+        // Review Focus 4: a long exposure on a sidereally tracked cislunar
+        // target streaks it out of the field. Reporting a confident SNR for a
+        // target that left the sensor would be worse than useless. The short
+        // side of this field is 1.31 deg = 4716"; at 0.549"/s that takes
+        // 8,590 s to cross, so 20,000 s is comfortably past it.
+        let (mut cfg, site) = fully_specified();
+        cfg.exposure_override_s = Some(20_000.0);
+        let c = detection("CIS", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("longer than the short side")));
+        assert!(c.verdict.contains("streaks off the sensor"));
+        assert!(c.status >= Status::Warn, "a target off the sensor must not be a PASS");
+    }
+
+    #[test]
+    fn detection_honours_an_entered_target_magnitude() {
+        let (mut cfg, site) = fixture(Some(l350(Some(10.0))));
+        cfg.target_mag_override = Some(14.0);
+        let c = detection("GEO", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("14.00") && d.contains("entered")));
+    }
+
+    #[test]
+    fn acceleration_is_info_with_no_mount() {
+        let (cfg, site) = fixture(None);
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+    }
+
+    #[test]
+    fn leo_is_the_only_window_constrained_regime() {
+        // LEO passes are over in minutes; everything else is available for
+        // hours, so only LEO grades the slew-and-settle check.
+        for r in regimes() {
+            match r.key {
+                "LEO" => assert_eq!(r.usable_window_s, Some(300.0)),
+                _ => assert_eq!(r.usable_window_s, None, "{} should be unconstrained", r.key),
+            }
+        }
+    }
+
+    #[test]
+    fn system_is_a_component() {
+        assert_eq!(Component::System.name(), "System");
     }
 
     #[test]

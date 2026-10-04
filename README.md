@@ -22,12 +22,14 @@ The tool has no external dependencies. It uses only the Rust standard library, s
 5. [The eight checks, with formulas and worked examples](#the-eight-checks)
 6. [Supplementary: timing reference for GEO stare mode](#supplementary-timing-reference-for-geo-stare-mode)
 7. [Orbital-regime evaluations](#orbital-regime-evaluations)
-8. [The comparison table](#the-comparison-table)
-9. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
-10. [Assumptions and limitations](#assumptions-and-limitations)
-11. [Spec-sheet red flags](#spec-sheet-red-flags)
-12. [Presets and their sources](#presets-and-their-sources)
-13. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
+8. [Mount acceleration](#mount-acceleration)
+9. [Target brightness and detection](#target-brightness-and-detection)
+10. [The comparison table](#the-comparison-table)
+11. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
+12. [Assumptions and limitations](#assumptions-and-limitations)
+13. [Spec-sheet red flags](#spec-sheet-red-flags)
+14. [Presets and their sources](#presets-and-their-sources)
+15. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
 
 ---
 
@@ -121,7 +123,7 @@ You don't need an optics background to use this tool, but these terms appear thr
 | OTA weight | lb | Spec sheet (optional) | 8 |
 | Pixel size | um | Camera spec sheet | 2, 3 |
 | Sensor width and height | pixels | Camera spec sheet | 1, 6 |
-| Read noise | e- RMS | Camera spec sheet (optional, illustrative) | 2 |
+| Read noise | e- RMS | Camera spec sheet (optional, 3 e- assumed if blank) | 2, Regime: detection |
 | Shutter type and line time | rolling/global, us | Camera manual (optional) | Supplementary |
 | Camera weight | lb | Camera spec sheet (optional) | 8 |
 | Mount type | alt-az / equatorial | Mount spec sheet | Regime: mount |
@@ -132,6 +134,13 @@ You don't need an optics background to use this tool, but these terms appear thr
 | Accessories weight | lb | Your estimate: focuser, dew heaters, cables, filter wheel, dovetail | 8 |
 | Back focus required | mm | Sum of your camera train's optical path lengths (optional) | 8 |
 | Timestamp accuracy | ms | Your timing chain: roughly 20 ms for a PC clock plus USB latency, 0.1 ms or better for GPS hardware timestamping | Regime: camera |
+| Sky background brightness | mag/arcsec^2 | Site measurement or a dark-sky map (optional, 21.0 assumed if blank) | Regime: detection |
+| Optical throughput | fraction 0..1 | Vendor, or measured (optional, 0.85 assumed if blank) | Regime: detection |
+| Quantum efficiency | fraction 0..1 | Camera QE curve (optional, 0.80 assumed if blank) | Regime: detection |
+| Mount maximum acceleration | deg/s^2 | Mount spec sheet (optional) | Regime: acceleration, keyhole, slew |
+| Mount settle time | s | Mount spec sheet or measured (optional, 2.0 s assumed if blank) | Regime: slew and settle |
+| Target apparent magnitude | mag | Your own catalog (optional, derived per regime if blank) | Regime: detection |
+| Exposure time | s | Your choice (optional, trail-limited value if blank) | Regime: detection |
 
 Obstruction can be typed as a percent (56) or a decimal (0.56). The tool treats any value above 1 as a percent.
 
@@ -648,15 +657,155 @@ The compact table printed with every evaluation shows the worst status per compo
 
 ```
 [----] Orbital regimes (worst status per component; details via the menu or --demo)
-       Regime                          Telescope  Camera   Mount    Overall
-       LEO (Low Earth orbit)           PASS       FAIL     WARN     FAIL
-       MEO (Medium Earth orbit)        PASS       WARN     WARN     WARN
-       GEO (Geosynchronous orbit)      PASS       WARN     PASS     WARN
-       HEO (Highly elliptical orbit)   PASS       WARN     WARN     WARN
-       CIS (Cislunar space)            PASS       PASS     PASS     PASS
+       Regime                          Telescope  Camera   Mount    System   Overall
+       LEO (Low Earth orbit)           PASS       FAIL     WARN     WARN     FAIL
+       MEO (Medium Earth orbit)        PASS       WARN     WARN     WARN     WARN
+       GEO (Geosynchronous orbit)      PASS       WARN     PASS     WARN     WARN
+       HEO (Highly elliptical orbit)   PASS       WARN     WARN     WARN     WARN
+       CIS (Cislunar space)            PASS       PASS     PASS     WARN     WARN
 ```
 
-This is the demo's DeltaRho 350 + IMX455 on an L-350 with GPS timestamps. Reading it: the telescope is fine everywhere. The camera fails LEO because of rolling-shutter skew, and only needs per-row timestamps for MEO, GEO and HEO. The mount's warnings come from one unanswered vendor question: whether its software supports TLE tracking. The fix for LEO is a global-shutter camera, which the demo's RASA 11 + IMX174 row confirms.
+This is the demo's DeltaRho 350 + IMX455 on an L-350 with GPS timestamps. Reading it: the telescope is fine everywhere. The camera fails LEO because of rolling-shutter skew, and only needs per-row timestamps for MEO, GEO and HEO. The mount's warnings come from unanswered vendor questions: whether its software supports TLE tracking, and what its axis acceleration is. The fix for LEO is a global-shutter camera, which the demo's RASA 11 + IMX174 row confirms.
+
+The System column is WARN in every regime, and that is not a finding about the hardware. The demo enters no quantum efficiency, throughput, sky brightness or read noise, so the detection check substitutes generic defaults and refuses to grade a PASS on them. Enter real values and the column grades normally.
+
+---
+
+## Mount acceleration
+
+### Peak tracking acceleration
+
+An overhead pass has `theta(t) = atan(v t / h)`. Differentiating twice, with `u = v t / h`:
+
+```
+theta'  = (v/h) / (1 + u^2)
+theta'' = -2 (v/h)^2 u / (1 + u^2)^2
+```
+
+`|theta''|` peaks at `u = 1/sqrt(3)`, which gives
+
+```
+peak acceleration = PEAK_ACCEL_COEFF x omega^2,   PEAK_ACCEL_COEFF = 3 sqrt(3) / 8 = 0.6495
+```
+
+where `omega = v/h` is the peak rate. This is a derived constant, not a tuned threshold.
+
+For the LEO regime, `omega = 0.87234 deg/s`, so the peak tracking acceleration is **0.008627 deg/s^2**. That is negligible for any mount in the preset list, and it is why the acceleration model does not stop here: compared against a spec sheet, this check would pass unconditionally and tell you nothing. The equivalent MEO figure is 1.37e-6 deg/s^2, nearly four orders smaller, because the requirement scales as `omega^2`. `ACCEL_MATTERS_DEG_S2` is set at 0.005 so that LEO alone trips the "ask the vendor" branch when a rating is missing.
+
+### The acceleration-limited keyhole
+
+Acceleration bites where the azimuth axis has to whip around near the zenith. There the azimuth angle sweeps through the same `atan` form as the pass itself, with the minimum zenith distance `z` in place of the altitude, so peak azimuth acceleration is `PEAK_ACCEL_COEFF x (omega/z)^2`. Requiring that to stay inside the mount's rating gives
+
+```
+z >= omega x sqrt(PEAK_ACCEL_COEFF / max acceleration)
+```
+
+The rate limit already gave `z >= omega / max rate`. These are two constraints on one physical keyhole, so the tool reports whichever binds and names which one it was:
+
+| Mount acceleration | Accel-limited keyhole | Rate-limited (50 deg/s) | Binding |
+|---|---|---|---|
+| 10 deg/s^2 | 88.3 deg elevation | 89.0 deg elevation | acceleration |
+| 2 deg/s^2 | 86.2 deg elevation | 89.0 deg elevation | acceleration |
+| 0.5 deg/s^2 | 82.5 deg elevation (WARN) | 89.0 deg elevation | acceleration |
+
+Acceleration binds in every realistic case, and by 0.5 deg/s^2 it has pushed the keyhole below `KEYHOLE_WARN_ELEV_DEG`. **When a mount publishes no acceleration figure the reported keyhole is the rate-only number, exactly as before this model existed.** None of the presets publish one, so none of their keyhole figures moved.
+
+### Slew and settle
+
+Getting on target is a trapezoidal move: accelerate to the rate limit, cruise, decelerate. If the distance is too short to reach the rate limit the profile is triangular instead.
+
+```
+trapezoidal (D >= v^2/a):  t = v/a + D/v
+triangular  (D <  v^2/a):  t = 2 sqrt(D/a)
+```
+
+Both branches agree at `D = v^2/a`, so the reported time cannot jump for a small change in the assumed distance.
+
+| Distance | Max rate | Max acceleration | Profile | Time |
+|---|---|---|---|---|
+| 90 deg | 50 deg/s | 10 deg/s^2 | triangular | 6.0 s |
+| 90 deg | 50 deg/s | 50 deg/s^2 | trapezoidal | 2.8 s |
+| 90 deg | 6 deg/s | 1 deg/s^2 | trapezoidal | 21.0 s |
+
+Slew plus settle is then graded against the regime's usable window. Only LEO has one (300 s, roughly how long a 500 km pass stays above useful elevation); every other regime stays available for hours, so the check reports INFO there. A direct-drive mount needs 6 s of slew and 2 s of settle, under 3% of a LEO pass. If the acceleration rating is missing but the slew rate is known, the tool still reports `D / v` as an explicit lower bound rather than giving up.
+
+---
+
+## Target brightness and detection
+
+### How bright the target is
+
+For a diffuse (Lambertian) target, the apparent magnitude follows from its cross-section, albedo, range and phase. The `1/pi` is the Lambertian scattering factor:
+
+```
+m = -26.74 - 2.5 x log10(albedo x area x phase / (pi x d^2))
+```
+
+with the area in square metres and the range in metres. The tool assumes one representative target, a 10 m^2 object at 0.2 albedo at full phase, so magnitudes differ between regimes only through range: the same object, moved further away.
+
+| Regime | Range | Derived magnitude |
+|---|---|---|
+| LEO | 500 km | 2.25 |
+| MEO | 20,200 km | 10.28 |
+| GEO | 37,000 km | 11.59 |
+| HEO | 39,836 km | 11.75 |
+| Cislunar | 384,400 km | 16.67 |
+
+The check on the absolute scale is that these land where real objects do: GEO objects run 11 to 15, cislunar 16 to 20. You can override the magnitude with your own figure.
+
+### Signal, sky and trailing
+
+A magnitude-zero source delivers about `8.9e9` photons per square metre per second in V band. (From the V-band zero point 3.64e-23 W/m^2/Hz over a 550 nm band 89 nm wide, giving 3.21e-9 W/m^2, divided by the 3.61e-19 J energy of a 550 nm photon.) So:
+
+```
+signal (e-/s)      = 8.9e9 x 10^(-0.4 m) x effective area x QE x throughput
+sky (e-/px/s)      = the same, at the sky magnitude, x plate scale^2
+```
+
+The sky term is just the point-source rate for that surface brightness scaled by the solid angle one pixel covers.
+
+Exposure is not a separate input. A target the mount holds still does not trail, so nothing bounds the exposure but a 30 s cap. A target tracked sidereally drifts at its rate against the stars, and the natural exposure is the one that keeps its trail inside a single seeing disk:
+
+```
+exposure = seeing / residual rate     (capped at MAX_EXPOSURE_S = 30 s)
+trail    = residual rate x exposure
+footprint (px) = (seeing / scale) x ((seeing + trail) / scale)
+```
+
+For cislunar at 2.5" seeing: the Moon's rate against the stars is 0.549"/s, so the exposure is 2.5 / 0.549 = **4.554 s**, the trail is 2.5" by construction, and the footprint is 2.5 x 5.0 / 0.7386^2 = **22.914 px**. You can override the exposure; if your choice trails the target off the sensor, the tool says so and will not report a PASS.
+
+### Signal-to-noise and limiting magnitude
+
+```
+SNR = S / sqrt(S + B + R^2 x n)
+```
+
+The signal appears inside the noise term because photon arrival is Poisson: its own shot noise is `sqrt(S)`.
+
+Setting `SNR = T` and solving for the signal gives a quadratic with one positive root, so the faintest detectable magnitude needs no search:
+
+```
+S_min = (T^2 + sqrt(T^4 + 4 T^2 N)) / 2,    N = B + R^2 x n
+m_limit = -2.5 x log10(S_min / K),          K = 8.9e9 x area x QE x throughput x exposure
+```
+
+For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21.0 mag/arcsec^2 sky, QE 0.80, throughput 0.85 and 3 e- read noise:
+
+| Regime | Mode | Exposure | Target mag | SNR | Limiting mag | Margin | Verdict |
+|---|---|---|---|---|---|---|---|
+| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 20.06 | +17.8 | trivial |
+| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 20.06 | +9.8 | trivial |
+| GEO | stare | 30 s (capped) | 11.59 | 526 | 20.06 | +8.5 | trivial |
+| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 20.06 | +8.3 | trivial |
+| Cislunar | sidereal | 4.554 s (trail-limited) | 16.67 | 14.9 | 18.15 | +1.5 | graded |
+
+Two things in that table are worth reading twice.
+
+The limiting magnitude is **identical at 20.06 for all four stationary-target regimes**. That is not a coincidence: they share an exposure (the 30 s cap), a zero trail, and therefore the same footprint and noise budget. They differ only in how bright the target is.
+
+And four of the five regimes sit above `SNR_TRIVIAL`, so the tool reports "detection is not the limiting factor" instead of a graded margin. That is the right answer rather than a mis-set threshold: a 14-inch aperture at 30 seconds genuinely does not struggle with anything nearer than the Moon. Cislunar is the only regime where detection is close, and it is the only regime whose limiting factor reads "brightness above all". The model reproduces the tool's own editorial judgment from computed numbers.
+
+Where the brightness figures come from generic defaults rather than entered values, the check is capped at WARN and names what it assumed. It will not tell you a configuration will detect something on the strength of a quantum efficiency it invented.
 
 ## The comparison table
 
@@ -753,6 +902,16 @@ Orbital-regime thresholds live in the `limits` module of `src/regimes.rs`:
 | `RATE_PASS_HEADROOM` / `RATE_WARN_HEADROOM` | 3.0 / 1.0 | Mount | Max axis rate / required rate |
 | `RATE_MATTERS_DEG_S` | 0.1 | Mount | Above this required rate, an unknown slew rate is WARN |
 | `KEYHOLE_PASS_ELEV_DEG` / `KEYHOLE_WARN_ELEV_DEG` | 85 / 70 | Mount | Highest followable pass elevation (alt-az) |
+| `ACCEL_PASS_HEADROOM` / `ACCEL_WARN_HEADROOM` | 3.0 / 1.0 | Mount | Max axis acceleration / required acceleration |
+| `ACCEL_MATTERS_DEG_S2` | 0.005 | Mount | Above this required acceleration, an unknown rating is WARN |
+| `SLEW_PASS_WINDOW_FRACTION` / `SLEW_WARN_WINDOW_FRACTION` | 0.10 / 0.25 | Mount | Slew + settle as a fraction of the usable window |
+| `DETECT_SNR_THRESHOLD` | 5.0 | System | SNR at which a target counts as detected |
+| `SNR_PASS` | 10.0 | System | SNR for comfortable detection |
+| `SNR_TRIVIAL` | 100.0 | System | Above this, detection is simply not what limits the regime |
+
+The photometric and dynamics assumptions live beside them: `REFERENCE_TARGET_CROSS_SECTION_M2` (10 m^2), `REFERENCE_TARGET_ALBEDO` (0.2), `DEFAULT_PHASE_FACTOR` (1.0, full phase), `DEFAULT_QE` (0.80), `DEFAULT_THROUGHPUT` (0.85), `DEFAULT_SKY_MAG_ARCSEC2` (21.0), `DEFAULT_READ_NOISE_E` (3.0), `MAX_EXPOSURE_S` (30 s), `DEFAULT_SLEW_DISTANCE_DEG` (90) and `DEFAULT_SETTLE_TIME_S` (2.0). `PEAK_ACCEL_COEFF` (3*sqrt(3)/8) and `PHOTONS_M2_S_MAG0` (8.9e9) are derived constants, not thresholds, and should not be tuned.
+
+A `plausible_ranges` module sets the bounds outside which a hand-entered value is treated as not entered: QE and throughput 0.01 to 1.0, sky brightness 15 to 24 mag/arcsec^2, read noise 0.1 to 100 e-, axis acceleration 1e-4 to 1000 deg/s^2, axis rate 1e-3 to 1000 deg/s, settle time 0 to 600 s. NaN and the infinities always fail.
 
 `DEFAULT_POINTING_RMS_ARCSEC` (60") in the same file is the pointing error assumed when a mount's figure isn't entered. The regime parameters themselves (ranges, rates, prediction errors) are in `regimes()`.
 
@@ -763,7 +922,6 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 ## Assumptions and limitations
 
 * **Seeing is a single number.** Real seeing varies by night, by elevation angle and through the night. Run the tool at your best, typical and worst seeing to see how sensitive a choice is.
-* **No absolute limiting magnitude.** Depth is reported relative to the reference only. Absolute limiting magnitude depends on sky brightness, exposure time, detector quantum efficiency, filters and detection thresholds, none of which are modeled.
 * **Small-angle approximation.** Field of view uses size / focal length. The error is well under 0.1% for fields of a few degrees.
 * **Obstruction ignores support vanes.** Spider vanes and cables in front of the aperture block a few more percent of the light and are not included.
 * **Gaussian blur model.** Converting RMS spot to FWHM and adding blurs in quadrature both assume roughly Gaussian blurs. Real optical blur is often not Gaussian, so treat check 4 as an approximate screen, not a performance prediction.
@@ -774,8 +932,14 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 * **Regimes are single representative cases.** Each regime is one geometry (for example a 500 km overhead LEO pass). Real targets span wide ranges of altitude, pass geometry and brightness. The overhead pass is deliberately the worst case for rates.
 * **Earth rotation simplified.** LEO and MEO rates ignore Earth's rotation, and the HEO and cislunar ground rates are simple differences from the sidereal rate. Directions of motion are ignored.
 * **Prediction errors are placeholders.** The along-track errors used for acquisition are assumptions, not catalog statistics.
-* **No acceleration model.** The mount check compares maximum rates only. Real LEO tracking also depends on axis acceleration, servo bandwidth and how smoothly the software follows the path.
-* **No brightness model.** Regime checks say what usually limits detection but don't estimate whether a specific target is bright enough to detect.
+* **One representative target.** Derived magnitudes assume a 10 m^2 object at 0.2 albedo, so the figures vary between regimes only through range. Real objects span orders of magnitude in size and brightness. Enter a target magnitude to override it.
+* **Full phase assumed.** The derived magnitude uses a phase factor of 1.0, the brightest case. A target near quadrature is roughly a magnitude fainter.
+* **Sky brightness is a single number.** No dependence on elevation, moon phase or airmass, and no extinction term.
+* **No saturation model.** Detector full-well depth is not modeled, so bright LEO targets report implausibly high SNR. The check reports these as "detection is not the limiting factor" rather than as a number to act on.
+* **Servo behaviour is still not modeled.** The acceleration model covers peak axis acceleration, the acceleration-limited keyhole and slew timing. Servo bandwidth, closed-loop following error and path-following smoothness are not included, because vendors do not publish the inputs.
+* **Slew distance is assumed.** The slew-and-settle check uses a 90-degree acquisition slew and, where the mount does not publish one, a 2-second settle.
+* **Photometric defaults are generic.** When QE, throughput, sky brightness or read noise are not entered, documented generic values are substituted and the detection check is capped at WARN. It will never report PASS on a quantum efficiency it assumed.
+* **Hand-entered values are range-checked.** A photometric or dynamics value outside a plausible range (a QE above 1, a NaN, a sky brightness of 2.1 where 21.0 was meant) is treated as not entered rather than trusted, so a typo degrades the report instead of corrupting it.
 * **Timing is a single figure.** The timestamp accuracy input lumps clock error, exposure-start latency and jitter together.
 * **Preset data can age.** Specs and weights come from listings at the time of writing and may change. Always confirm against current vendor documentation before buying.
 
@@ -796,6 +960,9 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 
 **Telescopes**
 
+No preset carries an optical throughput figure: no vendor publishes one for these tubes, and every value in `presets.yaml` has a `source`. The detection check assumes 0.85 and says so.
+
+
 | Preset | D (mm) | FL (mm) | Obstruction | Image circle (mm) | Notes |
 |---|---|---|---|---|---|
 | PlaneWave DeltaRho 350 | 350 | 1050 | 56% diameter | 60 | Spot 4.9 / 6.2 / 7.6 um RMS at 0 / 23 / 30 mm. Some listings show 5.6 / 6.4 um off-axis. The conservative values are used. 46 lb. |
@@ -806,6 +973,9 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 
 **Cameras**
 
+No preset carries a quantum efficiency or read-noise figure. Both vary with gain, mode and vendor binning for the same sensor, so entering a single number from a QE curve would be inventing data. The detection check assumes 0.80 and 3 e- and says so.
+
+
 | Preset | Pixel (um) | Pixels | Shutter | Notes |
 |---|---|---|---|---|
 | Sony IMX455 full frame (Moravian C3-61000 PRO, QHY600 PRO) | 3.76 | 9576 x 6388 | Rolling, 39.028 us/line | Line time from the Moravian C3 manual. 2.0 lb (QHY600 PRO). |
@@ -814,6 +984,9 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 | Sony IMX174 global shutter (e.g. QHY174M-GPS) | 5.86 | 1936 x 1216 | Global | Small sensor often used for low-orbit timing work. |
 
 **Mounts**
+
+No preset carries an axis-acceleration or settle-time figure: none of these vendors publish them. Ask, and enter what you are told. Until then the keyhole is reported on the rate limit alone and the acceleration check asks you to confirm with the vendor.
+
 
 | Preset | Type | Payload (lb) | Max slew (deg/s) | Notes |
 |---|---|---|---|---|

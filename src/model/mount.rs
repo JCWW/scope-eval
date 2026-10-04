@@ -27,6 +27,10 @@ pub struct Mount {
     pub capacity_lb: Option<f64>,
     /// Maximum slew (and tracking) rate per axis, degrees per second.
     pub max_slew_deg_s: Option<f64>,
+    /// Maximum axis acceleration, degrees per second squared.
+    pub max_accel_deg_s2: Option<f64>,
+    /// Time from the end of a slew until the mount is steady enough to image, seconds.
+    pub settle_time_s: Option<f64>,
     /// Pointing accuracy after a pointing model, arcsec RMS.
     pub pointing_rms_arcsec: Option<f64>,
     /// Can the control software track at arbitrary (non-sidereal) rates, e.g. from a TLE?

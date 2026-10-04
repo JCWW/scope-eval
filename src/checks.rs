@@ -690,7 +690,7 @@ pub fn evaluate(cfg: &Config, site: &Site, reference: Option<&Reference>) -> Eva
         supplementary,
         regimes: Vec::new(),
     };
-    ev.regimes = evaluate_regimes(cfg, &ev, site.seeing_arcsec, reference.map(|r| r.effective_area_m2));
+    ev.regimes = evaluate_regimes(cfg, &ev, site, reference.map(|r| r.effective_area_m2));
     ev
 }
 

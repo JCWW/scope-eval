@@ -90,6 +90,9 @@ pub struct Telescope {
     pub back_focus_mm: Option<f64>,
     /// Optical tube weight, lb.
     pub weight_lb: Option<f64>,
+    /// Optical throughput of the whole train (coatings, corrector, window),
+    /// as a fraction from 0 to 1. `None` means not entered.
+    pub throughput: Option<f64>,
     pub spot: Option<SpotSpec>,
     /// Where the preset numbers came from, and any caveats.
     pub source: String,
