@@ -8,7 +8,73 @@
 
 use std::f64::consts::PI;
 
-use crate::constants::{MAX_EXPOSURE_S, M_PER_KM, PHOTONS_M2_S_MAG0, SUN_APPARENT_MAG};
+use crate::constants::plausible_ranges as ranges;
+use crate::constants::{
+    DEFAULT_QE, DEFAULT_READ_NOISE_E, DEFAULT_SKY_MAG_ARCSEC2, DEFAULT_THROUGHPUT, MAX_EXPOSURE_S, M_PER_KM,
+    PHOTONS_M2_S_MAG0, SUN_APPARENT_MAG,
+};
+use crate::model::{plausible, Camera, Site, Telescope};
+
+/// Photometric inputs with defaults substituted, and the names of whatever
+/// was assumed rather than entered.
+///
+/// `assumed` is what stops the detection check reporting PASS on numbers the
+/// user never supplied. A value present but outside its plausible range is
+/// treated as absent; see [`crate::model::plausible`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Photometry {
+    pub qe: f64,
+    pub throughput: f64,
+    pub sky_mag_arcsec2: f64,
+    pub read_noise_e: f64,
+    /// Human-readable names of the inputs that fell back to a default.
+    /// Ordered as resolved, so the report reads consistently.
+    pub assumed: Vec<&'static str>,
+}
+
+impl Photometry {
+    pub fn resolve(t: &Telescope, c: &Camera, site: &Site) -> Self {
+        let mut assumed: Vec<&'static str> = Vec::new();
+        let mut take = |value: Option<f64>, lo: f64, hi: f64, default: f64, name: &'static str| {
+            match plausible(value, lo, hi) {
+                Some(v) => v,
+                None => {
+                    assumed.push(name);
+                    default
+                }
+            }
+        };
+        let qe = take(c.qe, ranges::QE_MIN, ranges::QE_MAX, DEFAULT_QE, "quantum efficiency");
+        let throughput = take(
+            t.throughput,
+            ranges::THROUGHPUT_MIN,
+            ranges::THROUGHPUT_MAX,
+            DEFAULT_THROUGHPUT,
+            "throughput",
+        );
+        let sky_mag_arcsec2 = take(
+            site.sky_mag_arcsec2,
+            ranges::SKY_MAG_MIN,
+            ranges::SKY_MAG_MAX,
+            DEFAULT_SKY_MAG_ARCSEC2,
+            "sky brightness",
+        );
+        let read_noise_e = take(
+            c.read_noise_e,
+            ranges::READ_NOISE_MIN,
+            ranges::READ_NOISE_MAX,
+            DEFAULT_READ_NOISE_E,
+            "read noise",
+        );
+        Photometry { qe, throughput, sky_mag_arcsec2, read_noise_e, assumed }
+    }
+
+    /// True when any input fell back to a default. The detection check must
+    /// not report PASS when this holds.
+    pub fn any_assumed(&self) -> bool {
+        !self.assumed.is_empty()
+    }
+}
 
 /// Apparent magnitude of a diffuse (Lambertian) target.
 ///
@@ -319,5 +385,140 @@ mod tests {
             limiting_mag(5.0, sky + 9.0 * n_px, signal_coefficient(AREA, QE, THRU, t))
         };
         assert!(faint(60.0) > faint(10.0));
+    }
+
+    // Camera, Site and Telescope arrive via `use super::*`; only these two
+    // need importing here (pre-flight ruling).
+    use crate::model::{Obstruction, Shutter};
+
+    fn bare_telescope() -> Telescope {
+        Telescope {
+            name: "test".into(),
+            aperture_mm: 350.0,
+            focal_length_mm: 1050.0,
+            obstruction: Obstruction::ByDiameter(0.56),
+            image_circle_mm: 60.0,
+            back_focus_mm: None,
+            weight_lb: None,
+            throughput: None,
+            spot: None,
+            source: "test".into(),
+        }
+    }
+
+    fn bare_camera() -> Camera {
+        Camera {
+            name: "test".into(),
+            pixel_um: 3.76,
+            width_px: 9576,
+            height_px: 6388,
+            read_noise_e: None,
+            qe: None,
+            shutter: Shutter::Global,
+            weight_lb: None,
+            source: "test".into(),
+        }
+    }
+
+    fn bare_site() -> Site {
+        Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None }
+    }
+
+    #[test]
+    fn resolve_names_every_assumed_input() {
+        let p = Photometry::resolve(&bare_telescope(), &bare_camera(), &bare_site());
+        assert!(p.any_assumed());
+        assert_eq!(p.assumed.len(), 4);
+        assert!(close(p.qe, 0.80, 1e-12));
+        assert!(close(p.throughput, 0.85, 1e-12));
+        assert!(close(p.sky_mag_arcsec2, 21.0, 1e-12));
+        assert!(close(p.read_noise_e, 3.0, 1e-12));
+    }
+
+    #[test]
+    fn resolve_names_nothing_when_everything_is_entered() {
+        let mut t = bare_telescope();
+        let mut c = bare_camera();
+        let mut s = bare_site();
+        t.throughput = Some(0.9);
+        c.qe = Some(0.7);
+        c.read_noise_e = Some(1.5);
+        s.sky_mag_arcsec2 = Some(21.9);
+        let p = Photometry::resolve(&t, &c, &s);
+        assert!(!p.any_assumed());
+        assert!(p.assumed.is_empty());
+        assert!(close(p.qe, 0.7, 1e-12));
+        assert!(close(p.throughput, 0.9, 1e-12));
+        assert!(close(p.sky_mag_arcsec2, 21.9, 1e-12));
+        assert!(close(p.read_noise_e, 1.5, 1e-12));
+    }
+
+    #[test]
+    fn resolve_rejects_a_quantum_efficiency_above_one() {
+        // Review Focus 1: unphysical, and it would silently shift every
+        // magnitude the tool reports.
+        let mut c = bare_camera();
+        c.qe = Some(1.5);
+        let p = Photometry::resolve(&bare_telescope(), &c, &bare_site());
+        assert!(close(p.qe, 0.80, 1e-12));
+        assert!(p.assumed.contains(&"quantum efficiency"));
+    }
+
+    #[test]
+    fn resolve_rejects_a_zero_or_negative_quantum_efficiency() {
+        for bad in [0.0, -0.2] {
+            let mut c = bare_camera();
+            c.qe = Some(bad);
+            let p = Photometry::resolve(&bare_telescope(), &c, &bare_site());
+            assert!(close(p.qe, 0.80, 1e-12), "qe {bad} was trusted");
+            assert!(p.assumed.contains(&"quantum efficiency"));
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_nan() {
+        // Review Focus 3: `.nan` is legal YAML, and NaN compares false
+        // against everything, so grading would fall through to FAIL.
+        let mut c = bare_camera();
+        c.qe = Some(f64::NAN);
+        let p = Photometry::resolve(&bare_telescope(), &c, &bare_site());
+        assert!(p.qe.is_finite());
+        assert!(close(p.qe, 0.80, 1e-12));
+        assert!(p.assumed.contains(&"quantum efficiency"));
+    }
+
+    #[test]
+    fn resolve_rejects_sky_brightness_at_the_wrong_scale() {
+        // Review Focus 5: 2.1 for 21.0 is a plausible typo, and 2.1
+        // mag/arcsec^2 is brighter than daylight. Trusting it would swamp
+        // the signal and FAIL every regime with no hint of the real cause.
+        let mut s = bare_site();
+        s.sky_mag_arcsec2 = Some(2.1);
+        let p = Photometry::resolve(&bare_telescope(), &bare_camera(), &s);
+        assert!(close(p.sky_mag_arcsec2, 21.0, 1e-12));
+        assert!(p.assumed.contains(&"sky brightness"));
+    }
+
+    #[test]
+    fn resolve_rejects_an_impossibly_dark_sky() {
+        let mut s = bare_site();
+        s.sky_mag_arcsec2 = Some(30.0);
+        let p = Photometry::resolve(&bare_telescope(), &bare_camera(), &s);
+        assert!(close(p.sky_mag_arcsec2, 21.0, 1e-12));
+        assert!(p.assumed.contains(&"sky brightness"));
+    }
+
+    #[test]
+    fn resolve_rejects_one_bad_input_without_discarding_the_others() {
+        let mut t = bare_telescope();
+        let mut c = bare_camera();
+        t.throughput = Some(0.9);
+        c.qe = Some(99.0);
+        c.read_noise_e = Some(1.5);
+        let p = Photometry::resolve(&t, &c, &bare_site());
+        assert!(close(p.throughput, 0.9, 1e-12));
+        assert!(close(p.read_noise_e, 1.5, 1e-12));
+        assert!(close(p.qe, 0.80, 1e-12));
+        assert_eq!(p.assumed, vec!["quantum efficiency", "sky brightness"]);
     }
 }
