@@ -74,6 +74,34 @@ pub fn footprint_px(seeing_arcsec: f64, trail_arcsec: f64, plate_scale: f64) -> 
     across * along
 }
 
+/// Signal-to-noise ratio for a target, against shot, sky and read noise.
+///
+/// `SNR = S / sqrt(S + B + R^2 n)`. The signal appears in the noise term
+/// because photon arrival is Poisson: its own shot noise is `sqrt(S)`.
+pub fn snr(signal_e: f64, sky_e_total: f64, read_noise_e: f64, n_px: f64) -> f64 {
+    let variance = signal_e + sky_e_total + read_noise_e * read_noise_e * n_px;
+    if variance <= 0.0 {
+        0.0
+    } else {
+        signal_e / variance.sqrt()
+    }
+}
+
+/// Faintest magnitude that reaches `threshold`.
+///
+/// `noise_variance_e2` is the non-signal variance `B + R^2 n`, and
+/// `signal_coefficient` is what a magnitude-zero target would deposit over
+/// the exposure (see [`signal_coefficient`]).
+///
+/// Setting `S / sqrt(S + N) = T` gives the quadratic `S^2 - T^2 S - T^2 N = 0`,
+/// whose positive root is `S = (T^2 + sqrt(T^4 + 4 T^2 N)) / 2`. Exact, so no
+/// iteration, and it inverts `snr` exactly rather than approximately.
+pub fn limiting_mag(threshold: f64, noise_variance_e2: f64, signal_coefficient: f64) -> f64 {
+    let t2 = threshold * threshold;
+    let s_min = (t2 + (t2 * t2 + 4.0 * t2 * noise_variance_e2).sqrt()) / 2.0;
+    -2.5 * (s_min / signal_coefficient).log10()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +233,91 @@ mod tests {
         let b = footprint_px(2.5, 5.0, SCALE);
         let c = footprint_px(2.5, 50.0, SCALE);
         assert!(a < b && b < c);
+    }
+
+    #[test]
+    fn geo_snr_deltarho350() {
+        // 30 s on a 11.59-mag target: 276,671 e- of signal against 298 e- of
+        // sky over an 11.46 px footprint and a 103 e- read term.
+        let signal = signal_e_per_s(11.5914, AREA, QE, THRU) * 30.0;
+        let n_px = footprint_px(2.5, 0.0, SCALE);
+        let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * 30.0 * n_px;
+        assert!(close(snr(signal, sky, 3.0, n_px), 525.6, 1.0));
+    }
+
+    #[test]
+    fn cislunar_snr_deltarho350() {
+        let t = trail_limited_exposure_s(2.5, LUNAR_RATE);
+        let n_px = footprint_px(2.5, trail_arcsec(LUNAR_RATE, t), SCALE);
+        let signal = signal_e_per_s(16.6739, AREA, QE, THRU) * t;
+        let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
+        assert!(close(snr(signal, sky, 3.0, n_px), 14.86, 0.05));
+    }
+
+    #[test]
+    fn cislunar_limiting_mag() {
+        let t = trail_limited_exposure_s(2.5, LUNAR_RATE);
+        let n_px = footprint_px(2.5, trail_arcsec(LUNAR_RATE, t), SCALE);
+        let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
+        let noise = sky + 9.0 * n_px;
+        let k = signal_coefficient(AREA, QE, THRU, t);
+        assert!(close(limiting_mag(5.0, noise, k), 18.155, 0.01));
+    }
+
+    #[test]
+    fn limiting_mag_round_trip() {
+        // A target at the limiting magnitude must come back out at exactly
+        // the threshold. This is the check that the quadratic inversion is
+        // the true inverse of snr(), not an approximation of it.
+        let t = 10.0;
+        let n_px = footprint_px(2.5, 0.0, SCALE);
+        let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
+        let noise = sky + 9.0 * n_px;
+        let k = signal_coefficient(AREA, QE, THRU, t);
+        let m = limiting_mag(5.0, noise, k);
+        let signal = signal_e_per_s(m, AREA, QE, THRU) * t;
+        assert!(close(snr(signal, sky, 3.0, n_px), 5.0, 1e-6));
+    }
+
+    #[test]
+    fn limiting_mag_round_trip_at_several_thresholds() {
+        let t = 10.0;
+        let n_px = footprint_px(2.5, 0.0, SCALE);
+        let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
+        let noise = sky + 9.0 * n_px;
+        let k = signal_coefficient(AREA, QE, THRU, t);
+        for threshold in [3.0, 5.0, 10.0, 50.0] {
+            let m = limiting_mag(threshold, noise, k);
+            let signal = signal_e_per_s(m, AREA, QE, THRU) * t;
+            assert!(
+                close(snr(signal, sky, 3.0, n_px), threshold, 1e-6),
+                "round trip failed at threshold {threshold}"
+            );
+        }
+    }
+
+    #[test]
+    fn limiting_mag_survives_a_noiseless_detector() {
+        // Zero sky and zero read noise is the signal-limited case: the
+        // inversion must not divide by zero. S = T^2 at N = 0.
+        let k = signal_coefficient(AREA, QE, THRU, 10.0);
+        let m = limiting_mag(5.0, 0.0, k);
+        assert!(m.is_finite());
+        assert!(close(10f64.powf(-0.4 * m) * k, 25.0, 1e-6));
+    }
+
+    #[test]
+    fn snr_of_no_signal_is_zero() {
+        assert!(close(snr(0.0, 0.0, 0.0, 0.0), 0.0, 1e-12));
+    }
+
+    #[test]
+    fn a_longer_exposure_detects_a_fainter_target() {
+        let faint = |t: f64| {
+            let n_px = footprint_px(2.5, 0.0, SCALE);
+            let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
+            limiting_mag(5.0, sky + 9.0 * n_px, signal_coefficient(AREA, QE, THRU, t))
+        };
+        assert!(faint(60.0) > faint(10.0));
     }
 }
