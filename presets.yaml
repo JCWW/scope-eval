@@ -1,0 +1,136 @@
+# Preset telescopes, cameras, and mounts offered by scope-eval's menus.
+#
+# Values come from vendor and dealer listings as noted in each `source`
+# field. Always confirm against the current spec sheet before a purchase.
+#
+# obstruction: one of `!by_diameter <fraction>`, `!by_area <fraction>`, or `none`.
+# shutter: one of `!rolling { line_time_us: <float or null> }` or `global`.
+# mount_type: one of `alt_az`, `equatorial`, `unknown`.
+# non_sidereal_tracking: `true`, `false`, or omit/null if not known.
+
+telescopes:
+  - name: "PlaneWave DeltaRho 350 (14\" f/3)"
+    aperture_mm: 350.0
+    focal_length_mm: 1050.0
+    obstruction: !by_diameter 0.56
+    image_circle_mm: 60.0
+    back_focus_mm: 143.5
+    weight_lb: 46.0
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 4.9
+        - field_radius_mm: 23.0
+          rms_um: 6.2
+        - field_radius_mm: 30.0
+          rms_um: 7.6
+    source: "PlaneWave/dealer spec sheets. Back focus is from the mounting surface without focuser. Some listings quote 5.6/6.4 um off-axis instead of 6.2/7.6 um. The conservative values are used here."
+
+  - name: "PlaneWave DeltaRho 500 (20\" f/3)"
+    aperture_mm: 508.0
+    focal_length_mm: 1537.0
+    obstruction: !by_diameter 0.59
+    image_circle_mm: 70.0
+    back_focus_mm: 232.8
+    weight_lb: 165.0
+    spot: null
+    source: "PlaneWave spec sheet. No spot data entered."
+
+  - name: "PlaneWave CDK14 (14\" f/7.2)"
+    aperture_mm: 356.0
+    focal_length_mm: 2563.0
+    obstruction: !by_diameter 0.485
+    image_circle_mm: 52.0
+    back_focus_mm: 282.0
+    weight_lb: 48.0
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 13.0
+          rms_um: 3.1
+        - field_radius_mm: 35.0
+          rms_um: 6.0
+    source: "PlaneWave CDK14 S-5 package page. That page lists both a 70 mm and a 52 mm image circle. The conservative 52 mm is used here."
+
+  - name: "PlaneWave CDK17 (17\" f/6.8)"
+    aperture_mm: 432.0
+    focal_length_mm: 2939.0
+    obstruction: !by_diameter 0.49
+    image_circle_mm: 70.0
+    back_focus_mm: 260.0
+    weight_lb: null
+    spot: null
+    source: "PlaneWave Europe spec sheet (49% by diameter = 23.7% by area). OTA weight not entered."
+
+  - name: "Celestron RASA 11 V2 (11\" f/2.2)"
+    aperture_mm: 279.0
+    focal_length_mm: 620.0
+    obstruction: !by_diameter 0.4086021505376344
+    image_circle_mm: 43.3
+    back_focus_mm: 72.8
+    weight_lb: 43.0
+    spot: null
+    source: "Celestron/dealer listings. 114 mm obstruction on a 279 mm aperture. The camera sits in front of the aperture, so a large camera body adds obstruction. Weight listings vary (35 to 43 lb). 43 lb is used."
+
+cameras:
+  - name: "Sony IMX455 full frame (Moravian C3-61000 PRO, QHY600 PRO)"
+    pixel_um: 3.76
+    width_px: 9576
+    height_px: 6388
+    read_noise_e: null
+    shutter: !rolling { line_time_us: 39.028 }
+    weight_lb: 2.0
+    source: "Line time from the Moravian C3 manual. Weight from QHY600 PRO (915 g). Rolling shutter."
+
+  - name: "Sony IMX571 APS-C (Moravian C3-26000 PRO)"
+    pixel_um: 3.76
+    width_px: 6252
+    height_px: 4176
+    read_noise_e: null
+    shutter: !rolling { line_time_us: 34.667 }
+    weight_lb: null
+    source: "Line time from the Moravian C3 manual. Weight not entered."
+
+  - name: "Sony IMX461 medium format (44 x 33 mm)"
+    pixel_um: 3.76
+    width_px: 11664
+    height_px: 8750
+    read_noise_e: null
+    shutter: !rolling { line_time_us: null }
+    weight_lb: null
+    source: "Nominal sensor format. Exact active pixel count varies by camera vendor. Line time and weight not entered."
+
+  - name: "Sony IMX174 global shutter (e.g. QHY174M-GPS)"
+    pixel_um: 5.86
+    width_px: 1936
+    height_px: 1216
+    read_noise_e: null
+    shutter: global
+    weight_lb: null
+    source: "Nominal sensor format. Small global-shutter sensor often used for LEO timing work."
+
+mounts:
+  - name: "PlaneWave L-350 (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 100.0
+    max_slew_deg_s: 50.0
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "PlaneWave listing: 100 lb payload, 50 deg/s slew, alt-az (equatorial with wedge). Pointing accuracy and TLE tracking not entered: confirm with the vendor."
+
+  - name: "PlaneWave L-500 (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 200.0
+    max_slew_deg_s: 50.0
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "PlaneWave listing: 200 lb payload, 50 deg/s slew, alt-az or equatorial. Pointing accuracy and TLE tracking not entered: confirm with the vendor."
+
+  - name: "iOptron HAE69C-EC (strain-wave)"
+    mount_type: equatorial
+    capacity_lb: 69.0
+    max_slew_deg_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "iOptron listing: 69 lb without counterweight (79 lb with). Can run alt-az or equatorial, entered as equatorial. Slew rate, pointing and TLE tracking not entered."

@@ -1,0 +1,14 @@
+[package]
+name = "scope-eval"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Interactive calculator that evaluates a telescope + camera pairing against eight optical checks"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+[profile.release]
+opt-level = 3
