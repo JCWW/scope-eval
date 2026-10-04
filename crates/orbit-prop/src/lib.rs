@@ -5,12 +5,14 @@
 pub mod constants;
 pub mod error;
 pub mod frames;
+pub mod illumination;
 pub mod keplerian;
 pub mod observe;
 pub mod propagator;
 pub mod sgp4_propagator;
 pub mod site;
 pub mod state;
+pub mod sun_moon;
 pub mod time;
 pub mod tle;
 // Some helpers are first used by observe and illumination (Tasks 5-6).
@@ -18,6 +20,7 @@ pub mod tle;
 mod vec3;
 
 pub use error::OrbitPropError;
+pub use illumination::Lighting;
 pub use keplerian::{KeplerElements, KeplerJ2};
 pub use observe::{observe, Observation};
 pub use propagator::Propagator;
