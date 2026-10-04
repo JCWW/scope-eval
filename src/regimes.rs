@@ -12,10 +12,12 @@
 use crate::checks::{kv, Evaluation, Status};
 use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
+    DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2, S_PER_US,
+    SIDEREAL_RATE_ARCSEC_PER_S,
 };
 use crate::constants::plausible_ranges as ranges;
 use crate::dynamics;
+use crate::photometry::{self, Photometry};
 use crate::model::{plausible, Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
@@ -731,6 +733,120 @@ fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
     RegimeCheck { component: Component::Mount, title: "Non-sidereal tracking", status, details, verdict }
 }
 
+// ---------------------------------------------------------------------------
+// System checks
+// ---------------------------------------------------------------------------
+
+/// How fast the target moves across the sensor, arcsec/s, given how it is tracked.
+///
+/// A rate-tracked target is held still by the mount, and an Earth-fixed target
+/// in stare mode is still by definition; the stars are what trail in both
+/// cases. Under sidereal tracking it is the other way round: the target drifts
+/// against the tracked stars at its rate against them.
+fn residual_rate_arcsec_s(r: &Regime) -> f64 {
+    match r.mode {
+        TrackingMode::RateTrack | TrackingMode::Stare => 0.0,
+        TrackingMode::Sidereal => r.rate_vs_stars,
+    }
+}
+
+/// Is the target bright enough for this configuration to detect?
+fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
+    let title = "Detection";
+    let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
+    let (target_mag, mag_from) = match cfg.target_mag_override {
+        Some(m) => (m, "entered"),
+        None => (
+            photometry::derived_target_mag(
+                REFERENCE_TARGET_CROSS_SECTION_M2,
+                REFERENCE_TARGET_ALBEDO,
+                r.range_km,
+                DEFAULT_PHASE_FACTOR,
+            ),
+            "derived",
+        ),
+    };
+    let residual = residual_rate_arcsec_s(r);
+    let (exposure, exp_from) = match cfg.exposure_override_s {
+        Some(t) => (t, "entered"),
+        None => (photometry::trail_limited_exposure_s(site.seeing_arcsec, residual), "derived"),
+    };
+
+    let scale = ev.metrics.plate_scale;
+    let area = ev.metrics.effective_area_m2;
+    let trail = photometry::trail_arcsec(residual, exposure);
+    let n_px = photometry::footprint_px(site.seeing_arcsec, trail, scale);
+    let signal = photometry::signal_e_per_s(target_mag, area, p.qe, p.throughput) * exposure;
+    let sky = photometry::sky_e_per_px_s(p.sky_mag_arcsec2, scale, area, p.qe, p.throughput)
+        * exposure
+        * n_px;
+    let snr = photometry::snr(signal, sky, p.read_noise_e, n_px);
+    let noise_variance = sky + p.read_noise_e * p.read_noise_e * n_px;
+    let m_limit = photometry::limiting_mag(
+        limits::DETECT_SNR_THRESHOLD,
+        noise_variance,
+        photometry::signal_coefficient(area, p.qe, p.throughput, exposure),
+    );
+
+    let mut details = vec![
+        kv("Target magnitude", format!("{target_mag:.2} ({mag_from})")),
+        kv("Exposure", format!("{exposure:.3} s ({exp_from})")),
+        kv("Trail", format!("{trail:.2}\" ({:.1} px)", trail / scale)),
+        kv("Footprint", format!("{n_px:.1} px")),
+        kv("Signal / sky", format!("{signal:.0} e- / {sky:.0} e-")),
+        kv("SNR", format!("{snr:.1}")),
+        kv("Limiting magnitude", format!("{m_limit:.2}")),
+        kv("Margin", format!("{:+.2} mag", m_limit - target_mag)),
+    ];
+
+    let trivial = snr >= limits::SNR_TRIVIAL;
+    let mut status = if snr >= limits::SNR_PASS {
+        Status::Pass
+    } else if snr >= limits::DETECT_SNR_THRESHOLD {
+        Status::Warn
+    } else {
+        Status::Fail
+    };
+    let mut verdict = if trivial {
+        format!(
+            "Detection is not the limiting factor here, so choose exposure for saturation and timing instead. What limits this regime is {}.",
+            r.limiting_factor
+        )
+    } else if status == Status::Pass {
+        format!("Detectable with margin: SNR {snr:.0} against a threshold of {:.0}.", limits::DETECT_SNR_THRESHOLD)
+    } else if status == Status::Warn {
+        "Marginal: detectable, but close enough to the threshold that conditions will decide it.".to_string()
+    } else {
+        "Too faint to detect in this configuration.".to_string()
+    };
+
+    // None of the above means anything if the target left the sensor.
+    let short_side_arcsec = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE;
+    if trail > short_side_arcsec {
+        details.push(kv("Trail vs field", "longer than the short side of the field".to_string()));
+        verdict.push_str(" The trail is longer than the field, so the target streaks off the sensor during the exposure: shorten it.");
+        if status == Status::Pass {
+            status = Status::Warn;
+        }
+    }
+
+    // Never claim a PASS on numbers the user did not supply. Checked against
+    // Pass explicitly: Status is ordered Info < Pass < Warn < Fail, so a
+    // `.max(Warn)` here would also promote an Info.
+    if p.any_assumed() {
+        details.push(kv("Assumed inputs", p.assumed.join(", ")));
+        if status == Status::Pass {
+            status = Status::Warn;
+            verdict.push_str(&format!(
+                " Not graded PASS because these were assumed rather than entered: {}.",
+                p.assumed.join(", ")
+            ));
+        }
+    }
+
+    RegimeCheck { component: Component::System, title, status, details, verdict }
+}
+
 /// Evaluate one configuration against every regime.
 pub fn evaluate_regimes(
     cfg: &Config,
@@ -752,6 +868,7 @@ pub fn evaluate_regimes(
                 mount_acceleration(cfg, &r),
                 mount_slew_settle(cfg, &r),
                 mount_non_sidereal(cfg, &r),
+                system_detection(cfg, ev, &r, site),
             ];
             RegimeEvaluation { regime: r, checks }
         })
@@ -981,6 +1098,134 @@ mod tests {
         assert!(close(keyhole_elev(&cfg, &site), 82.48, 0.05));
         let c = check_for("LEO", "Tracking rate", &cfg, &site);
         assert!(c.status >= Status::Warn);
+    }
+
+    fn detection(key: &str, cfg: &Config, site: &Site) -> RegimeCheck {
+        check_for(key, "Detection", cfg, site)
+    }
+
+    /// A fixture with every photometric input entered, so nothing is capped.
+    fn fully_specified() -> (Config, Site) {
+        let (mut cfg, mut site) = fixture(Some(l350(Some(10.0))));
+        cfg.telescope.throughput = Some(0.85);
+        cfg.camera.qe = Some(0.80);
+        cfg.camera.read_noise_e = Some(3.0);
+        site.sky_mag_arcsec2 = Some(21.0);
+        (cfg, site)
+    }
+
+    /// A numeric value out of a named detail line.
+    fn detail_number(c: &RegimeCheck, label: &str) -> f64 {
+        let line = c
+            .details
+            .iter()
+            .find(|d| d.contains(label))
+            .unwrap_or_else(|| panic!("no detail {label}"));
+        line.split_whitespace()
+            .find_map(|w| w.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("no number in detail {label}"))
+    }
+
+    #[test]
+    fn residual_rate_follows_the_tracking_mode() {
+        for r in regimes() {
+            let residual = residual_rate_arcsec_s(&r);
+            match r.mode {
+                // The mount holds a rate-tracked or stared target still.
+                TrackingMode::RateTrack | TrackingMode::Stare => {
+                    assert!(close(residual, 0.0, 1e-12), "{} should not trail", r.key)
+                }
+                // Under sidereal tracking the target drifts against the stars.
+                TrackingMode::Sidereal => assert!(close(residual, r.rate_vs_stars, 1e-12)),
+            }
+        }
+    }
+
+    #[test]
+    fn detection_caps_at_warn_when_inputs_are_assumed() {
+        // Every preset carries null QE, throughput and read noise, and the
+        // fixture's site carries no sky brightness, so nothing here is
+        // entered. GEO would otherwise grade PASS on SNR 526.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.details.iter().any(|d| d.contains("quantum efficiency")));
+        assert!(c.verdict.contains("assumed"));
+    }
+
+    #[test]
+    fn detection_passes_when_every_input_is_entered() {
+        let (cfg, site) = fully_specified();
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+        assert!(!c.verdict.contains("assumed"));
+    }
+
+    #[test]
+    fn detection_fail_is_not_changed_by_cap() {
+        // The cap must be an `== Pass` test, not `.max(Warn)`: a FAIL stays a
+        // FAIL whether or not inputs were assumed. Replaces the spec's
+        // Info-based test, since the detection check has no Info path.
+        let (mut cfg, site) = fixture(Some(l350(Some(10.0))));
+        cfg.target_mag_override = Some(30.0); // far beyond any limit
+        let c = detection("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn cislunar_is_the_only_regime_detection_actually_grades() {
+        // Every regime nearer than the Moon exceeds SNR_TRIVIAL on a 14-inch
+        // at 30 s, which is the point: brightness is not what limits them.
+        let (cfg, site) = fully_specified();
+        for key in ["LEO", "MEO", "GEO", "HEO"] {
+            let c = detection(key, &cfg, &site);
+            assert!(
+                c.verdict.contains("not the limiting factor"),
+                "{key} should be trivially detectable"
+            );
+        }
+        let cis = detection("CIS", &cfg, &site);
+        assert!(!cis.verdict.contains("not the limiting factor"));
+        assert_eq!(cis.status, Status::Pass);
+    }
+
+    #[test]
+    fn stationary_regimes_share_a_limiting_magnitude() {
+        // LEO, MEO, GEO and HEO all hold the target still, so they share an
+        // exposure, a zero trail, a footprint and a noise budget, and
+        // therefore a limiting magnitude of 20.06. They differ only in target
+        // magnitude. A guard against the noise terms picking up a spurious
+        // range dependence.
+        let (cfg, site) = fully_specified();
+        let leo = detail_number(&detection("LEO", &cfg, &site), "Limiting magnitude");
+        assert!(close(leo, 20.06, 0.02), "LEO limiting magnitude {leo}");
+        for key in ["MEO", "GEO", "HEO"] {
+            let m = detail_number(&detection(key, &cfg, &site), "Limiting magnitude");
+            assert!(close(m, leo, 0.001), "{key} limiting magnitude {m} differs from LEO {leo}");
+        }
+    }
+
+    #[test]
+    fn detection_warns_when_the_trail_runs_off_the_sensor() {
+        // Review Focus 4: a long exposure on a sidereally tracked cislunar
+        // target streaks it out of the field. Reporting a confident SNR for a
+        // target that left the sensor would be worse than useless. The short
+        // side of this field is 1.31 deg = 4716"; at 0.549"/s that takes
+        // 8,590 s to cross, so 20,000 s is comfortably past it.
+        let (mut cfg, site) = fully_specified();
+        cfg.exposure_override_s = Some(20_000.0);
+        let c = detection("CIS", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("longer than the short side")));
+        assert!(c.verdict.contains("streaks off the sensor"));
+        assert!(c.status >= Status::Warn, "a target off the sensor must not be a PASS");
+    }
+
+    #[test]
+    fn detection_honours_an_entered_target_magnitude() {
+        let (mut cfg, site) = fixture(Some(l350(Some(10.0))));
+        cfg.target_mag_override = Some(14.0);
+        let c = detection("GEO", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("14.00") && d.contains("entered")));
     }
 
     #[test]
