@@ -1,7 +1,9 @@
 //! Printing evaluations and the comparison table.
 
 use crate::checks::{Evaluation, Status};
+use crate::constants::plausible_ranges as ranges;
 use crate::constants::DEFAULT_SKY_MAG_ARCSEC2;
+use crate::model::plausible;
 use crate::model::{Config, Shutter, Site};
 use crate::regimes::Component;
 
@@ -32,10 +34,7 @@ pub fn print_evaluation(cfg: &Config, ev: &Evaluation, site: &Site) {
         " Site:      seeing {:.2}\" FWHM, wavelength {:.2} um, sky {}",
         site.seeing_arcsec,
         site.wavelength_um,
-        match site.sky_mag_arcsec2 {
-            Some(s) => format!("{s:.2} mag/arcsec^2"),
-            None => format!("{DEFAULT_SKY_MAG_ARCSEC2:.2} mag/arcsec^2 (assumed)"),
-        }
+        sky_label(site.sky_mag_arcsec2)
     );
 
     for chk in &ev.checks {
@@ -238,6 +237,56 @@ pub fn print_regime_summary(ev: &Evaluation) {
             word(r.component_status(Component::System)),
             word(r.overall())
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sky_label_reports_an_entered_value_plainly() {
+        assert_eq!(sky_label(Some(21.9)), "21.90 mag/arcsec^2");
+    }
+
+    #[test]
+    fn sky_label_marks_an_absent_value_as_assumed() {
+        assert_eq!(sky_label(None), "21.00 mag/arcsec^2 (assumed)");
+    }
+
+    #[test]
+    fn sky_label_does_not_echo_an_implausible_value_back_as_fact() {
+        // 2.1 for 21.0 is a plausible typo, and brighter than daylight. The
+        // model substitutes 21.0 and names it; the header must not contradict
+        // that by confirming the typo to the reader.
+        let label = sky_label(Some(2.1));
+        assert!(label.starts_with("21.00 mag/arcsec^2 (assumed"), "got {label}");
+        assert!(label.contains("2.10"), "the rejected value should still be shown: {label}");
+        assert!(label.contains("outside"), "say why it was rejected: {label}");
+    }
+
+    #[test]
+    fn sky_label_rejects_an_impossibly_dark_sky() {
+        assert!(sky_label(Some(30.0)).starts_with("21.00 mag/arcsec^2 (assumed"));
+    }
+}
+
+/// How the site's sky brightness should read in the report header.
+///
+/// A value outside the plausible range is not echoed back as fact: the
+/// detection check substituted a default for it, and a header that confirmed
+/// the original would contradict the check in the same report.
+fn sky_label(sky_mag_arcsec2: Option<f64>) -> String {
+    match plausible(sky_mag_arcsec2, ranges::SKY_MAG_MIN, ranges::SKY_MAG_MAX) {
+        Some(s) => format!("{s:.2} mag/arcsec^2"),
+        None => match sky_mag_arcsec2 {
+            Some(bad) => format!(
+                "{DEFAULT_SKY_MAG_ARCSEC2:.2} mag/arcsec^2 (assumed; {bad:.2} is outside {:.0}-{:.0})",
+                ranges::SKY_MAG_MIN,
+                ranges::SKY_MAG_MAX
+            ),
+            None => format!("{DEFAULT_SKY_MAG_ARCSEC2:.2} mag/arcsec^2 (assumed)"),
+        },
     }
 }
 

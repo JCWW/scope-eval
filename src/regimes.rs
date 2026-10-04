@@ -488,7 +488,8 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
             verdict: "No mount selected.".to_string(),
         };
     };
-    let Some(max) = m.max_slew_deg_s else {
+    let Some(max) = plausible(m.max_slew_deg_s, ranges::SLEW_RATE_MIN_DEG_S, ranges::SLEW_RATE_MAX_DEG_S)
+    else {
         let status = if required_deg_s > limits::RATE_MATTERS_DEG_S { Status::Warn } else { Status::Info };
         return RegimeCheck {
             component: Component::Mount,
@@ -1079,6 +1080,25 @@ mod tests {
         for bad in [0.0, -5.0, f64::NAN] {
             let (cfg, site) = fixture(Some(l350(Some(bad))));
             assert!(close(keyhole_elev(&cfg, &site), 89.0, 0.05), "rating {bad} moved the keyhole");
+        }
+    }
+
+    #[test]
+    fn tracking_rate_treats_a_nonsense_slew_rate_as_unknown() {
+        // A 0.0 or NaN max_slew_deg_s in presets.yaml must not become a
+        // confident FAIL with "-inf deg elevation" in it. mount_slew_settle
+        // already filters this field; mount_rate must too.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let mut m = l350(Some(10.0));
+            m.max_slew_deg_s = Some(bad);
+            let (cfg, site) = fixture(Some(m));
+            let c = check_for("LEO", "Tracking rate", &cfg, &site);
+            assert!(c.verdict.contains("unknown"), "slew rate {bad} was trusted: {}", c.verdict);
+            assert!(
+                !c.details.iter().any(|d| d.contains("inf") || d.contains("NaN")),
+                "slew rate {bad} leaked a non-finite figure into the report: {:?}",
+                c.details
+            );
         }
     }
 

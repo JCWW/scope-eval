@@ -118,11 +118,15 @@ fn run_interactive() {
             }
             3 => {
                 site.seeing_arcsec = input::ask_positive("New seeing FWHM, arcsec", Some(site.seeing_arcsec));
-                site.sky_mag_arcsec2 = input::ask_optional_hint(
+                let answer = input::ask_optional_hint(
                     "Sky brightness, mag/arcsec^2",
-                    "blank to assume 21.0",
+                    match site.sky_mag_arcsec2 {
+                        Some(_) => "blank to keep the current value",
+                        None => "blank to assume 21.0",
+                    },
                     false,
                 );
+                site.sky_mag_arcsec2 = input::resolve_keep(answer, site.sky_mag_arcsec2);
                 println!("Site updated. All configurations will be re-evaluated.");
             }
             4 => report::print_formulas(),
@@ -199,10 +203,9 @@ fn build_config() -> Config {
     println!("\nDetection inputs. Leave both blank to use values derived per regime:");
     println!("a 10 m^2 target at 0.2 albedo and full phase, exposed until its trail");
     println!("reaches one seeing disk (capped at 30 s).");
-    let target_mag_override = input::ask_optional_hint(
+    let target_mag_override = input::ask_optional_signed(
         "Target apparent magnitude",
-        "blank for the derived value",
-        false,
+        "blank for the derived value; negative is brighter",
     );
     let exposure_override_s = input::ask_optional_hint(
         "Exposure time, s",
