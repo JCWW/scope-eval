@@ -1,6 +1,7 @@
 //! Printing evaluations and the comparison table.
 
 use crate::checks::{Evaluation, Status};
+use crate::constants::DEFAULT_SKY_MAG_ARCSEC2;
 use crate::model::{Config, Shutter, Site};
 use crate::regimes::Component;
 
@@ -28,8 +29,13 @@ pub fn print_evaluation(cfg: &Config, ev: &Evaluation, site: &Site) {
         c.name, c.pixel_um, c.width_px, c.height_px
     );
     println!(
-        " Site:      seeing {:.2}\" FWHM, wavelength {:.2} um",
-        site.seeing_arcsec, site.wavelength_um
+        " Site:      seeing {:.2}\" FWHM, wavelength {:.2} um, sky {}",
+        site.seeing_arcsec,
+        site.wavelength_um,
+        match site.sky_mag_arcsec2 {
+            Some(s) => format!("{s:.2} mag/arcsec^2"),
+            None => format!("{DEFAULT_SKY_MAG_ARCSEC2:.2} mag/arcsec^2 (assumed)"),
+        }
     );
 
     for chk in &ev.checks {
@@ -128,8 +134,8 @@ pub fn print_comparison(evals: &[Evaluation]) {
     }
 
     if let Some(first) = evals.first() {
-        println!("\n Orbital regimes, telescope/camera/mount (P=pass W=warn F=fail i=info):");
-        let header: Vec<String> = first.regimes.iter().map(|r| format!("{:<7}", r.regime.key)).collect();
+        println!("\n Orbital regimes, telescope/camera/mount/system (P=pass W=warn F=fail i=info):");
+        let header: Vec<String> = first.regimes.iter().map(|r| format!("{:<9}", r.regime.key)).collect();
         println!("{:<28}  {}", "", header.join(" "));
         for e in evals {
             let cells: Vec<String> = e
@@ -137,12 +143,13 @@ pub fn print_comparison(evals: &[Evaluation]) {
                 .iter()
                 .map(|r| {
                     format!(
-                        "{:<7}",
+                        "{:<9}",
                         format!(
-                            "{}/{}/{}",
+                            "{}/{}/{}/{}",
                             letter(r.component_status(Component::Telescope)),
                             letter(r.component_status(Component::Camera)),
-                            letter(r.component_status(Component::Mount))
+                            letter(r.component_status(Component::Mount)),
+                            letter(r.component_status(Component::System))
                         )
                     )
                 })
@@ -181,6 +188,17 @@ Orbital regimes (component checks per regime)
    Trailing          t = seeing / rate vs stars
    Mount headroom    max axis rate / rate vs ground   (keep >= 3x)
    Alt-az keyhole    highest followable pass = 90 deg - (omega / max azimuth rate) in degrees
+   Peak accel        alpha = 0.6495 x omega^2        (0.6495 = 3 sqrt(3) / 8)
+   Accel keyhole     z >= omega x sqrt(0.6495 / max accel)
+   Keyhole reported  the larger of the rate and acceleration limits
+   Slew time         t = v/a + D/v,  or 2 sqrt(D/a) if D < v^2/a
+   Target magnitude  m = -26.74 - 2.5 x log10(albedo x area x phase / (pi x d^2))
+   Signal            e-/s = 8.9e9 x 10^(-0.4 m) x area x QE x throughput
+   Sky               e-/px/s = same, at the sky magnitude, x plate scale^2
+   Trail-limited t   exposure = seeing / residual rate   (capped at 30 s)
+   Footprint         (seeing / scale) x ((seeing + trail) / scale)
+   SNR               S / sqrt(S + B + R^2 x n)
+   Limiting mag      invert SNR = 5:  S = (T^2 + sqrt(T^4 + 4 T^2 N)) / 2
 "#
     );
 }
@@ -206,14 +224,18 @@ fn letter(s: Status) -> &'static str {
 /// Compact component-by-regime table printed with every evaluation.
 pub fn print_regime_summary(ev: &Evaluation) {
     println!("\n[----] Orbital regimes (worst status per component; details via the menu or --demo)");
-    println!("       {:<31} {:<10} {:<8} {:<8} {}", "Regime", "Telescope", "Camera", "Mount", "Overall");
+    println!(
+        "       {:<31} {:<10} {:<8} {:<8} {:<8} {}",
+        "Regime", "Telescope", "Camera", "Mount", "System", "Overall"
+    );
     for r in &ev.regimes {
         println!(
-            "       {:<31} {:<10} {:<8} {:<8} {}",
+            "       {:<31} {:<10} {:<8} {:<8} {:<8} {}",
             format!("{} ({})", r.regime.key, r.regime.name),
             word(r.component_status(Component::Telescope)),
             word(r.component_status(Component::Camera)),
             word(r.component_status(Component::Mount)),
+            word(r.component_status(Component::System)),
             word(r.overall())
         );
     }
@@ -228,14 +250,18 @@ pub fn print_regime_details(ev: &Evaluation) {
         let g = &r.regime;
         println!("\n--- {} : {} -- {} ---", g.key, g.name, g.case);
         println!(
-            "    range {:.0} km | vs stars {:.2}\"/s | vs ground {:.2}\"/s | prediction error {:.0} km | usual mode: {}",
+            "    range {:.0} km | vs stars {:.2}\"/s | vs ground {:.2}\"/s | prediction error {:.0} km | usual mode: {} | window {}",
             g.range_km,
             g.rate_vs_stars,
             g.rate_vs_ground,
             g.ephemeris_uncertainty_km,
-            g.mode.describe()
+            g.mode.describe(),
+            match g.usable_window_s {
+                Some(w) => format!("{w:.0} s"),
+                None => "unlimited".to_string(),
+            }
         );
-        for comp in [Component::Telescope, Component::Camera, Component::Mount] {
+        for comp in [Component::Telescope, Component::Camera, Component::Mount, Component::System] {
             for k in r.checks.iter().filter(|k| k.component == comp) {
                 println!("\n  {} {}: {}", k.status.tag(), comp.name(), k.title);
                 for d in &k.details {
@@ -245,11 +271,12 @@ pub fn print_regime_details(ev: &Evaluation) {
             }
         }
         println!(
-            "\n  {} overall: telescope {}, camera {}, mount {}",
+            "\n  {} overall: telescope {}, camera {}, mount {}, system {}",
             g.key,
             word(r.component_status(Component::Telescope)),
             word(r.component_status(Component::Camera)),
-            word(r.component_status(Component::Mount))
+            word(r.component_status(Component::Mount)),
+            word(r.component_status(Component::System))
         );
     }
 }
