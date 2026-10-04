@@ -8,6 +8,7 @@ mod checks;
 mod constants;
 mod input;
 mod model;
+mod photometry;
 mod presets;
 mod regimes;
 mod report;
