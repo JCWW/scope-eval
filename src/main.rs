@@ -16,12 +16,15 @@ mod regimes;
 mod report;
 
 use constants::{
-    DEFAULT_SEEING_ARCSEC, DEFAULT_TIMESTAMP_MS, DEFAULT_WAVELENGTH_UM, DEMO_ASSUMED_POINTING_RMS_ARCSEC,
+    DEFAULT_MIN_ELEVATION_DEG, DEFAULT_SEEING_ARCSEC, MAX_PASS_SEARCH_HOURS, DEFAULT_TIMESTAMP_MS, DEFAULT_WAVELENGTH_UM, DEMO_ASSUMED_POINTING_RMS_ARCSEC,
     GPS_TIMESTAMP_MS,
 };
 use model::{
     Camera, Capability, Config, Mount, MountType, Obstruction, Payload, Shutter, Site, SpotConvention, SpotPoint,
     SpotSpec, Telescope,
+};
+use orbit_prop::{
+    find_passes, Epoch, GroundSite, KeplerElements, KeplerJ2, OrbitPropError, PassSearch, Propagator, Sgp4Propagator, Tle,
 };
 
 fn main() {
@@ -50,6 +53,10 @@ against five orbital regimes: LEO, MEO, GEO, HEO (Molniya) and cislunar,
 covering tracking rate, axis acceleration, slew-and-settle timing, timing
 accuracy, shutter skew, acquisition and whether the target is bright enough
 to detect.
+
+The interactive menu can also predict passes of a satellite (from a TLE or
+a what-if orbit) over your site, and judge whether each evaluated mount can
+follow each pass.
 
 USAGE:
   scope-eval            interactive menu
@@ -88,13 +95,15 @@ fn run_interactive() {
             "Compare all evaluated configurations".to_string(),
             "Show detailed orbital-regime evaluation for a configuration".to_string(),
             format!(
-                "Change site conditions (seeing {:.2}\", sky {})",
+                "Change site conditions (seeing {:.2}\", sky {}, {})",
                 site.seeing_arcsec,
                 match site.sky_mag_arcsec2 {
                     Some(s) => format!("{s:.2}"),
                     None => "assumed".to_string(),
-                }
+                },
+                describe_location(&site)
             ),
+            "Predict passes for a satellite".to_string(),
             "Show formula summary".to_string(),
             "Remove all configurations and start over".to_string(),
             "Quit".to_string(),
@@ -129,16 +138,192 @@ fn run_interactive() {
                     false,
                 );
                 site.sky_mag_arcsec2 = input::resolve_keep(answer, site.sky_mag_arcsec2);
+                site.location = ask_location(site.location);
                 println!("Site updated. All configurations will be re-evaluated.");
             }
-            4 => report::print_formulas(),
-            5 => {
+            4 => run_pass_prediction(&mut site, &configs),
+            5 => report::print_formulas(),
+            6 => {
                 configs.clear();
                 println!("Cleared.");
             }
             _ => break,
         }
     }
+}
+
+fn describe_location(site: &Site) -> String {
+    match site.location {
+        Some(l) => format!("site {:.4}, {:.4}, {:.0} m", l.lat_deg, l.lon_deg, l.alt_m),
+        None => "location not set".to_string(),
+    }
+}
+
+/// Ask for the site's location. A blank latitude keeps `current`.
+fn ask_location(current: Option<GroundSite>) -> Option<GroundSite> {
+    let hint = if current.is_some() { "blank to keep the current location" } else { "blank to skip" };
+    loop {
+        let Some(lat) = input::ask_optional_signed("Site latitude, deg (north positive)", hint) else {
+            return current;
+        };
+        let lon = loop {
+            if let Some(v) = input::ask_optional_signed("Site longitude, deg (east positive)", "required") {
+                break v;
+            }
+            println!("  A longitude is required.");
+        };
+        let alt = input::ask_optional_signed("Site altitude, m", "blank for 0").unwrap_or(0.0);
+        match GroundSite::new(lat, lon, alt) {
+            Ok(s) => return Some(s),
+            Err(e) => println!("  {e}"),
+        }
+    }
+}
+
+/// An optional UTC time. Blank returns `None`.
+fn ask_epoch(prompt: &str, hint: &str) -> Option<Epoch> {
+    loop {
+        let s = input::read_line(&format!("{prompt} ({hint}): "));
+        if s.is_empty() {
+            return None;
+        }
+        match Epoch::parse_iso8601(&s) {
+            Ok(t) => return Some(t),
+            Err(e) => println!("  {e}"),
+        }
+    }
+}
+
+/// Read a pasted TLE line by line until it parses.
+fn ask_tle() -> Tle {
+    println!("Paste the TLE (2 lines, or 3 with a name line first):");
+    let mut lines: Vec<String> = Vec::new();
+    loop {
+        let line = input::read_line("> ");
+        if line.is_empty() {
+            continue;
+        }
+        let is_line2 = line.starts_with("2 ");
+        lines.push(line);
+        if is_line2 {
+            match Tle::parse(&lines.join("\n")) {
+                Ok(t) => return t,
+                Err(e) => println!("  {e}\n  Please paste the TLE again."),
+            }
+            lines.clear();
+        } else if lines.len() > 2 {
+            println!("  That doesn't look like a TLE. Please paste it again.");
+            lines.clear();
+        }
+    }
+}
+
+/// Where the orbit comes from. A what-if orbit's epoch defaults to the
+/// search start, which is asked for afterwards.
+enum OrbitSource {
+    Tle(Tle),
+    WhatIf {
+        perigee_km: f64,
+        apogee_km: f64,
+        i_deg: f64,
+        raan_deg: f64,
+        argp_deg: f64,
+        mean_anomaly_deg: f64,
+        epoch: Option<Epoch>,
+    },
+}
+
+fn ask_orbit_source() -> OrbitSource {
+    let options = ["Paste a TLE".to_string(), "Define a what-if orbit".to_string()];
+    if input::ask_menu("Orbit source", &options) == 0 {
+        return OrbitSource::Tle(ask_tle());
+    }
+    let perigee_km = input::ask_positive("Perigee altitude, km", None);
+    let apogee_km = loop {
+        let a = input::ask_positive("Apogee altitude, km", Some(perigee_km));
+        if a >= perigee_km {
+            break a;
+        }
+        println!("  Apogee must be at least the perigee altitude.");
+    };
+    let i_deg = loop {
+        let i = input::ask_nonnegative("Inclination, deg", 0.0);
+        if i <= 180.0 {
+            break i;
+        }
+        println!("  Inclination must be between 0 and 180 degrees.");
+    };
+    OrbitSource::WhatIf {
+        perigee_km,
+        apogee_km,
+        i_deg,
+        raan_deg: input::ask_nonnegative("Right ascension of the ascending node, deg", 0.0),
+        argp_deg: input::ask_nonnegative("Argument of perigee, deg", 0.0),
+        mean_anomaly_deg: input::ask_nonnegative("Mean anomaly at epoch, deg", 0.0),
+        epoch: ask_epoch("Element epoch, UTC YYYY-MM-DDTHH:MM", "blank for the search start"),
+    }
+}
+
+fn build_propagator(source: OrbitSource, start: Epoch) -> Result<Box<dyn Propagator>, OrbitPropError> {
+    match source {
+        OrbitSource::Tle(tle) => {
+            if let Some(note) = passes_report::stale_tle_note(&tle.epoch, &start) {
+                println!("\n  {note}");
+            }
+            Ok(Box::new(Sgp4Propagator::new(&tle)?))
+        }
+        OrbitSource::WhatIf { perigee_km, apogee_km, i_deg, raan_deg, argp_deg, mean_anomaly_deg, epoch } => {
+            let el = KeplerElements::from_altitudes(
+                epoch.unwrap_or(start),
+                perigee_km,
+                apogee_km,
+                i_deg,
+                raan_deg,
+                argp_deg,
+                mean_anomaly_deg,
+            )?;
+            let label = format!("what-if orbit {perigee_km:.0} x {apogee_km:.0} km, {i_deg:.1} deg");
+            Ok(Box::new(KeplerJ2::new(el, &label)?))
+        }
+    }
+}
+
+/// Menu item: predict passes over the site and judge each evaluated mount.
+fn run_pass_prediction(site: &mut Site, configs: &[Config]) {
+    if site.location.is_none() {
+        println!("\nPass prediction needs the site's location.");
+        while site.location.is_none() {
+            site.location = ask_location(None);
+        }
+    }
+    let Some(location) = site.location else { return };
+    let source = ask_orbit_source();
+    let start = ask_epoch("Search start, UTC YYYY-MM-DDTHH:MM", "blank for now").unwrap_or_else(Epoch::now);
+    let hours = loop {
+        let h = input::ask_positive("Search length, hours", Some(24.0));
+        if h <= MAX_PASS_SEARCH_HOURS {
+            break h;
+        }
+        println!("  The longest search is {MAX_PASS_SEARCH_HOURS:.0} hours.");
+    };
+    let min_el_deg = loop {
+        let e = input::ask_nonnegative("Minimum elevation, deg", DEFAULT_MIN_ELEVATION_DEG);
+        if e < 90.0 {
+            break e;
+        }
+        println!("  Enter an elevation below 90 degrees.");
+    };
+    let prop = match build_propagator(source, start) {
+        Ok(p) => p,
+        Err(e) => {
+            println!("\n  {e}");
+            return;
+        }
+    };
+    let search = PassSearch { start, end: start.add_seconds(hours * 3600.0), min_el_deg };
+    println!("\nSearching {hours:.0} h from {start} ...");
+    let result = find_passes(prop.as_ref(), &location, &search);
+    passes_report::print_passes(prop.label(), &result, configs);
 }
 
 fn build_config() -> Config {

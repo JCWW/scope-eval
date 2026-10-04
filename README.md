@@ -9,7 +9,7 @@ The tool works in two layers:
 
 You pick hardware from built-in presets or type in numbers from any spec sheet. Every result is graded PASS, WARN, FAIL or INFO with a plain-English explanation. Evaluate several configurations and the tool prints a side-by-side comparison, including a regime-by-component matrix.
 
-The tool has no external dependencies. It uses only the Rust standard library, so it builds offline and is easy to audit.
+The tool has three external dependencies, all pure Rust: `serde` and `serde_yaml` read `presets.yaml`, and `sgp4` propagates satellite orbits inside the bundled `orbit-prop` library (`crates/orbit-prop`). The code is small enough to audit.
 
 ---
 
@@ -24,12 +24,13 @@ The tool has no external dependencies. It uses only the Rust standard library, s
 7. [Orbital-regime evaluations](#orbital-regime-evaluations)
 8. [Mount acceleration](#mount-acceleration)
 9. [Target brightness and detection](#target-brightness-and-detection)
-10. [The comparison table](#the-comparison-table)
-11. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
-12. [Assumptions and limitations](#assumptions-and-limitations)
-13. [Spec-sheet red flags](#spec-sheet-red-flags)
-14. [Presets and their sources](#presets-and-their-sources)
-15. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
+10. [Pass prediction](#pass-prediction)
+11. [The comparison table](#the-comparison-table)
+12. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
+13. [Assumptions and limitations](#assumptions-and-limitations)
+14. [Spec-sheet red flags](#spec-sheet-red-flags)
+15. [Presets and their sources](#presets-and-their-sources)
+16. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
 
 ---
 
@@ -42,7 +43,7 @@ cargo build --release          # build
 cargo run --release            # interactive menu
 cargo run --release -- --demo  # evaluate the presets, show one full regime breakdown, compare all
 cargo run --release -- --help  # usage
-cargo test                     # run the worked examples in this README as unit tests
+cargo test                     # run the worked examples in this README, and the orbit-prop library's tests
 ```
 
 A typical interactive session:
@@ -807,6 +808,35 @@ And four of the five regimes sit above `SNR_TRIVIAL`, so the tool reports "detec
 
 Where the brightness figures come from generic defaults rather than entered values, the check is capped at WARN and names what it assumed. It will not tell you a configuration will detect something on the strength of a quantum efficiency it invented.
 
+## Pass prediction
+
+The regime checks above judge one representative geometry per regime. **Predict passes for a satellite** in the main menu uses the real path of one orbit over your site instead: it lists every pass in a time window and judges, pass by pass, whether each evaluated mount can follow it.
+
+You enter:
+
+1. **Your site's location**: latitude (north positive), longitude (east positive) and altitude in metres. It is asked for once and can be changed under **Change site conditions**.
+2. **The orbit**, one of:
+   * *Paste a TLE* from CelesTrak or Space-Track (two lines, or three with a name line first). It is propagated with SGP4, the model TLEs are fitted with. If the TLE's epoch is more than 14 days from the search start, the tool warns that pass times may be off by minutes.
+   * *Define a what-if orbit*: perigee and apogee altitude, inclination, right ascension of the ascending node, argument of perigee and mean anomaly. It is propagated as a Keplerian orbit with J2 drift, which is right for "what would a 550 km, 53 degree orbit look like from here" but not for tracking a particular object.
+3. **The window**: start time in UTC (blank for now), length (24 hours by default, 720 at most) and minimum elevation (10 degrees by default).
+
+Example, the what-if orbit 550 km at 53 degrees from 40 N 75 W with a PlaneWave L-350 whose acceleration was entered as 2 deg/s^2:
+
+```
+ #  Rise (UTC)            Set (UTC)  Duration MaxEl  Az rate El rate Sunlit  Dark     | Mount 1
+ 1  2026-10-04 04:56:04 04:58:50     2m45s  11.4   0.245   0.032 no      yes      | [PASS] az rate 203.8x
+ 2  2026-10-04 06:32:15 06:40:37     8m22s  86.3  11.603   0.686 no      yes      | [WARN] az accel 1.3x
+ 3  2026-10-04 08:13:07 08:19:47     6m40s  22.3   0.366   0.080 partial yes      | [PASS] az rate 136.5x
+```
+
+* **Az rate, El rate** are the peak axis rates an alt-az mount needs during the pass, in deg/s. Pass 2 culminates at 86 degrees, so its azimuth axis has to swing 11.6 deg/s near the zenith: the alt-az keyhole, computed from the real pass rather than from a formula.
+* **Sunlit** says whether the satellite is in sunlight (yes, partial, no). An optical sensor sees only sunlit satellites.
+* **Dark** says whether the Sun is more than 12 degrees below your horizon (yes, twilight, no).
+* **Mount N** compares the pass's peak axis rate and acceleration with the mount's ratings, using the thresholds of the regime mount checks (`RATE_PASS_HEADROOM`, `ACCEL_PASS_HEADROOM` and the rest in `src/constants.rs`). The note names the axis and quantity that bind and their headroom. An equatorial mount is judged on its hour-angle and declination axes. A rating that is unknown gives WARN when the pass needs real speed and INFO when it doesn't.
+* `<` before a rise time means the satellite was already up when the window started; `>` after a set time means it was still up when the window ended.
+
+The geometry comes from the `orbit-prop` library in `crates/orbit-prop`, whose README documents its models, accuracy and limits.
+
 ## The comparison table
 
 Choose **Compare all evaluated configurations**, or run `--demo`. Example from the demo at 2.5" seeing, with GPS timestamps (0.1 ms) and 30" mount pointing assumed:
@@ -941,6 +971,9 @@ The default seeing (2.5") and reference wavelength (0.55 um, green light near th
 * **Photometric defaults are generic.** When QE, throughput, sky brightness or read noise are not entered, documented generic values are substituted and the detection check is capped at WARN. It will never report PASS on a quantum efficiency it assumed.
 * **Hand-entered values are range-checked.** A photometric or dynamics value outside a plausible range (a QE above 1, a NaN, a sky brightness of 2.1 where 21.0 was meant) is treated as not entered rather than trusted, so a typo degrades the report instead of corrupting it.
 * **Timing is a single figure.** The timestamp accuracy input lumps clock error, exposure-start latency and jitter together.
+* **Pass prediction is assessment grade.** Earth orientation uses mean sidereal time only, the Sun and Moon use low-precision formulas, and atmospheric refraction is ignored. Positions are good to about 0.01 degrees, well inside TLE error, but this is not astrometry. The upgrade path is listed in `crates/orbit-prop/README.md` under "Known limitations and future work".
+* **Short grazing passes can be missed.** The pass search steps at one sixtieth of the orbital period (90 seconds for the ISS), so a pass that stays above the minimum elevation for less than that may not be found.
+* **What-if orbits drift.** They include J2's slow drift but no drag and no short-period terms, so they stand for a kind of orbit, not a specific satellite.
 * **Preset data can age.** Specs and weights come from listings at the time of writing and may change. Always confirm against current vendor documentation before buying.
 
 ---
@@ -1001,8 +1034,9 @@ Preset mounts leave pointing accuracy and TLE-tracking support blank on purpose.
 ## Code structure and extending the tool
 
 ```
+Cargo.toml     workspace: scope-eval (this directory) and crates/orbit-prop
 src/
-  main.rs      command-line entry point, interactive menus, --demo, --help
+  main.rs      command-line entry point, interactive menus, pass-prediction prompts, --demo, --help
   model/       data types: Telescope, Camera, Mount, Site, Payload, Config, Obstruction, SpotSpec
   calculations/
     optics.rs    telescope geometry, plate scale, sampling, focus and collecting-area calculations
@@ -1014,7 +1048,9 @@ src/
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
   presets.rs   built-in telescopes, cameras and mounts, with sources
   report.rs    printing evaluations, regime summaries and details, comparison tables, formula summary
+  passes_report.rs  pass table and the per-pass "Mount can follow?" judgment
   input.rs     validated terminal input helpers
+crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geometry, lighting, pass finding
 ```
 
 **Design notes**
@@ -1035,7 +1071,7 @@ src/
 
 **Adding a regime check.** Write a function returning a `RegimeCheck` tagged with its `Component`, and add it to the list in `evaluate_regimes`. Component and overall statuses are recomputed automatically.
 
-**Tests.** `cargo test` runs the worked examples from this README: plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement.
+**Tests.** `cargo test` runs the worked examples from this README: plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement. It also runs the `orbit-prop` tests, which check the library against published references: Vallado's GMST, site-vector and SGP4 verification cases, and Meeus's Sun and Moon examples.
 
 ---
 
