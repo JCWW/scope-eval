@@ -7,3 +7,4 @@ description = "Satellite propagation (SGP4 and Keplerian + J2) and ground-site o
 license = "MIT"
 
 [dependencies]
+sgp4 = { version = "2.3", default-features = false, features = ["alloc", "std"] }
