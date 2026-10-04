@@ -63,6 +63,31 @@ pub fn keyhole_rad(
     }
 }
 
+/// Time to slew a given distance under rate and acceleration limits, seconds.
+///
+/// A trapezoidal velocity profile: accelerate to the rate limit, cruise,
+/// decelerate. If the distance is too short to reach the rate limit the
+/// profile is triangular instead. The boundary is at `D = v^2 / a`, where
+/// both branches agree.
+///
+/// ```text
+/// trapezoidal (D >= v^2/a):  t = v/a + D/v
+/// triangular  (D <  v^2/a):  t = 2 sqrt(D/a)
+/// ```
+///
+/// A non-positive rate or acceleration yields infinity.
+pub fn slew_time_s(distance_deg: f64, max_rate_deg_s: f64, max_accel_deg_s2: f64) -> f64 {
+    if max_rate_deg_s <= 0.0 || max_accel_deg_s2 <= 0.0 {
+        return f64::INFINITY;
+    }
+    let ramp_distance = max_rate_deg_s * max_rate_deg_s / max_accel_deg_s2;
+    if distance_deg >= ramp_distance {
+        max_rate_deg_s / max_accel_deg_s2 + distance_deg / max_rate_deg_s
+    } else {
+        2.0 * (distance_deg / max_accel_deg_s2).sqrt()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +152,50 @@ mod tests {
         let (z, binding) = keyhole_rad(omega, 50.0f64.to_radians(), Some(1e6f64.to_radians()));
         assert!(close(90.0 - z.to_degrees(), 89.0, 0.01));
         assert_eq!(binding, "rate");
+    }
+
+    #[test]
+    fn slew_time_triangular_when_the_rate_limit_is_never_reached() {
+        // 90 deg at 10 deg/s^2 would need 250 deg to reach 50 deg/s, so the
+        // profile is accelerate-then-decelerate: t = 2 sqrt(D/a) = 6.0 s.
+        assert!(close(slew_time_s(90.0, 50.0, 10.0), 6.0, 0.01));
+    }
+
+    #[test]
+    fn slew_time_trapezoidal_when_the_rate_limit_is_reached() {
+        // Ramp distance 50 deg < 90 deg, so it cruises: t = v/a + D/v.
+        assert!(close(slew_time_s(90.0, 50.0, 50.0), 2.8, 0.01));
+        assert!(close(slew_time_s(90.0, 6.0, 1.0), 21.0, 0.01));
+    }
+
+    #[test]
+    fn slew_time_is_continuous_at_the_profile_boundary() {
+        // At D = v^2/a the two branches must agree, or the check's output
+        // would jump for a one-degree change in the assumed distance.
+        let (v, a) = (50.0, 10.0);
+        let boundary = v * v / a;
+        let below = slew_time_s(boundary - 1e-6, v, a);
+        let above = slew_time_s(boundary + 1e-6, v, a);
+        assert!(close(below, above, 1e-4));
+    }
+
+    #[test]
+    fn slew_time_grows_with_distance_and_shrinks_with_capability() {
+        assert!(slew_time_s(180.0, 50.0, 10.0) > slew_time_s(90.0, 50.0, 10.0));
+        assert!(slew_time_s(90.0, 50.0, 20.0) < slew_time_s(90.0, 50.0, 10.0));
+        assert!(slew_time_s(90.0, 10.0, 10.0) > slew_time_s(90.0, 50.0, 10.0));
+    }
+
+    #[test]
+    fn slew_time_is_total_for_zero_capability() {
+        assert!(slew_time_s(90.0, 0.0, 10.0).is_infinite());
+        assert!(slew_time_s(90.0, 50.0, 0.0).is_infinite());
+        assert!(slew_time_s(90.0, -1.0, -1.0).is_infinite());
+    }
+
+    #[test]
+    fn a_zero_distance_slew_takes_no_time() {
+        assert!(close(slew_time_s(0.0, 50.0, 10.0), 0.0, 1e-12));
     }
 
     #[test]
