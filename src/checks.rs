@@ -6,53 +6,13 @@
 //! functions turn those numbers into a pass/warn/fail judgment with an
 //! explanation.
 
+use crate::constants::{
+    checks_limits as limits, ARCMIN_PER_DEGREE, ARCSEC_PER_RADIAN, DEG_PER_RADIAN, FWHM_PER_RMS_RADIUS, KG_PER_LB,
+    MM_PER_M, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S, TIMING_ERROR_EXAMPLE_S, UM_PER_MM,
+};
 use crate::model::{Camera, Config, Shutter, Site, SpotConvention, SpotPoint, Telescope};
 use crate::regimes::{evaluate_regimes, RegimeEvaluation};
 use std::f64::consts::PI;
-
-// ---------------------------------------------------------------------------
-// Physical constants
-// ---------------------------------------------------------------------------
-
-/// Arcseconds in one radian (180 / pi * 3600).
-pub const ARCSEC_PER_RADIAN: f64 = 206_264.806;
-/// Degrees in one radian.
-pub const DEG_PER_RADIAN: f64 = 180.0 / PI;
-/// Apparent drift of the stars past an Earth-fixed (GEO) object, arcsec per second.
-/// One full turn (1,296,000") per sidereal day (86,164.09 s).
-pub const SIDEREAL_RATE_ARCSEC_PER_S: f64 = 1_296_000.0 / 86_164.0905;
-/// For a round Gaussian blur, FWHM = 2*sqrt(ln 2) * (RMS radius) = 1.665 * RMS radius.
-pub const FWHM_PER_RMS_RADIUS: f64 = 1.665_109;
-
-// ---------------------------------------------------------------------------
-// Judgment thresholds. These are engineering rules of thumb, not physics.
-// Change them here to tune the tool to your program's standards.
-// ---------------------------------------------------------------------------
-pub mod limits {
-    /// Check 1: image circle may be this fraction of the sensor diagonal before failing.
-    pub const FIT_WARN_FRACTION: f64 = 0.90;
-    /// Check 2: ideal number of pixels across a star's FWHM.
-    pub const SAMPLING_TARGET: f64 = 2.0;
-    pub const SAMPLING_UNDER_FAIL: f64 = 1.0;
-    pub const SAMPLING_GOOD_MIN: f64 = 1.5;
-    pub const SAMPLING_GOOD_MAX: f64 = 2.5;
-    pub const SAMPLING_BIN2_MAX: f64 = 4.0;
-    pub const SAMPLING_OVER_FAIL: f64 = 6.0;
-    /// Largest square bin factor the tool will recommend.
-    pub const MAX_BIN: u32 = 4;
-    /// Check 3: effective pixel within this ratio of ideal counts as a match.
-    pub const PIXEL_MATCH_LOW: f64 = 0.75;
-    pub const PIXEL_MATCH_HIGH: f64 = 1.33;
-    /// Check 4: allowed growth of the star image caused by the optics.
-    pub const OPTICS_PASS_GROWTH: f64 = 0.15;
-    pub const OPTICS_WARN_GROWTH: f64 = 0.35;
-    /// Check 7: critical focus zone half-widths, micrometers.
-    pub const CFZ_FORGIVING_UM: f64 = 40.0;
-    pub const CFZ_DEMANDING_UM: f64 = 15.0;
-    /// Check 8: payload as a fraction of mount capacity.
-    pub const PAYLOAD_PASS_FRACTION: f64 = 0.70;
-    pub const PAYLOAD_WARN_FRACTION: f64 = 0.90;
-}
 
 // ---------------------------------------------------------------------------
 // Pure calculations
@@ -61,7 +21,7 @@ pub mod limits {
 /// Plate scale: sky angle seen by one pixel, arcsec/px.
 /// Small-angle rule: angle = size / distance, with the focal length as the distance.
 pub fn plate_scale_arcsec_per_px(pixel_um: f64, focal_length_mm: f64) -> f64 {
-    ARCSEC_PER_RADIAN * (pixel_um / 1000.0) / focal_length_mm
+    ARCSEC_PER_RADIAN * (pixel_um / UM_PER_MM) / focal_length_mm
 }
 
 /// How many pixels span a star's FWHM.
@@ -83,12 +43,12 @@ pub fn best_bin(pixels_across: f64) -> u32 {
 /// Pixel size (um) that would put SAMPLING_TARGET pixels across a star at this focal length.
 /// This is the plate-scale formula solved for pixel size.
 pub fn ideal_pixel_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
-    (seeing_arcsec / limits::SAMPLING_TARGET) / ARCSEC_PER_RADIAN * focal_length_mm * 1000.0
+    (seeing_arcsec / limits::SAMPLING_TARGET) / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
 }
 
 /// Physical size of the seeing blur on the focal plane, um.
 pub fn seeing_blur_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
-    seeing_arcsec / ARCSEC_PER_RADIAN * focal_length_mm * 1000.0
+    seeing_arcsec / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
 }
 
 /// Convert a quoted RMS spot figure to an approximate FWHM, assuming a round Gaussian blur.
@@ -137,7 +97,7 @@ pub fn spot_rms_at(points: &[SpotPoint], radius_mm: f64) -> Option<(f64, bool)> 
 
 /// Light-collecting area after subtracting the central obstruction, m^2.
 pub fn effective_area_m2(aperture_mm: f64, blocked_area_fraction: f64) -> f64 {
-    let d_m = aperture_mm / 1000.0;
+    let d_m = aperture_mm / MM_PER_M;
     PI / 4.0 * d_m * d_m * (1.0 - blocked_area_fraction)
 }
 
@@ -253,7 +213,7 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
         kv("Image circle / diagonal", format!("{:.2}", ic / diag)),
     ];
     let (status, verdict) = if ic >= diag {
-        let headroom = if ic > 1.15 * diag {
+        let headroom = if ic > limits::FIT_HEADROOM_FACTOR * diag {
             format!(" Headroom for a sensor up to about {ic:.0} mm diagonal.")
         } else {
             String::new()
@@ -487,11 +447,11 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
 
 /// Check 5: effective collecting area and depth relative to the reference.
 pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckResult, f64) {
-    let d_m = t.aperture_mm / 1000.0;
+    let d_m = t.aperture_mm / MM_PER_M;
     let geometric = PI / 4.0 * d_m * d_m;
     let blocked = t.obstruction.area_fraction();
     let area = effective_area_m2(t.aperture_mm, blocked);
-    let equivalent_d = 2.0 * (area / PI).sqrt() * 1000.0;
+    let equivalent_d = 2.0 * (area / PI).sqrt() * MM_PER_M;
 
     let mut details = vec![
         kv("Geometric area (pi/4 x D^2)", format!("{geometric:.4} m^2")),
@@ -531,7 +491,10 @@ pub fn check_field_and_search(
     let etendue = area_m2 * fov_area;
 
     let mut details = vec![
-        kv("Field of view", format!("{w:.2} x {h:.2} deg  ({:.0}' x {:.0}')", w * 60.0, h * 60.0)),
+        kv(
+            "Field of view",
+            format!("{w:.2} x {h:.2} deg  ({:.0}' x {:.0}')", w * ARCMIN_PER_DEGREE, h * ARCMIN_PER_DEGREE),
+        ),
         kv("Field area", format!("{fov_area:.2} deg^2")),
         kv("Fields to tile 100 deg^2 (no overlap)", format!("~{:.0}", (100.0 / fov_area).ceil())),
         kv("Etendue (area x field)", format!("{etendue:.3} m^2 deg^2")),
@@ -602,7 +565,7 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
     let total = ota + cam + p.accessories_lb;
     details.push(kv(
         "Payload (OTA + camera + accessories)",
-        format!("{ota:.1} + {cam:.1} + {:.1} = {total:.1} lb ({:.1} kg)", p.accessories_lb, total * 0.4536),
+        format!("{ota:.1} + {cam:.1} + {:.1} = {total:.1} lb ({:.1} kg)", p.accessories_lb, total * KG_PER_LB),
     ));
     if !unknown.is_empty() {
         details.push(kv("Not included (weight unknown)", unknown.join(", ")));
@@ -665,13 +628,17 @@ pub fn geo_motion_and_timing(c: &Camera, plate_scale: f64, bin: u32) -> Vec<Stri
         ),
         kv(
             "Position error per 10 ms of timing error",
-            format!("{:.3}\" = {:.2} px ({bin}x{bin} bin)", rate * 0.010, rate * 0.010 / binned),
+            format!(
+                "{:.3}\" = {:.2} px ({bin}x{bin} bin)",
+                rate * TIMING_ERROR_EXAMPLE_S,
+                rate * TIMING_ERROR_EXAMPLE_S / binned
+            ),
         ),
     ];
     match c.shutter {
         Shutter::Global => out.push(kv("Shutter", "global: every row exposed at once, no row correction".to_string())),
         Shutter::Rolling { line_time_us: Some(lt) } => {
-            let skew_s = c.height_px as f64 * lt * 1e-6;
+            let skew_s = c.height_px as f64 * lt * S_PER_US;
             out.push(kv(
                 "Rolling-shutter readout skew",
                 format!("{} rows x {lt:.3} us = {:.3} s", c.height_px, skew_s),

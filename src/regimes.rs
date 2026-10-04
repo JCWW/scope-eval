@@ -9,40 +9,12 @@
 //! All regime numbers are representative worst-to-typical cases, documented
 //! in README.md. Change them in `regimes()` to match your own catalog.
 
-use crate::checks::{kv, Evaluation, Status, ARCSEC_PER_RADIAN, SIDEREAL_RATE_ARCSEC_PER_S};
+use crate::checks::{kv, Evaluation, Status};
+use crate::constants::{
+    regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
+    EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
+};
 use crate::model::{Capability, Config, MountType, Shutter};
-
-/// Earth's gravitational parameter, km^3/s^2.
-pub const MU_EARTH: f64 = 398_600.4418;
-/// Earth's equatorial radius, km.
-pub const EARTH_RADIUS_KM: f64 = 6_378.137;
-/// One full circle in arcseconds.
-const ARCSEC_PER_CIRCLE: f64 = 1_296_000.0;
-
-/// Mount pointing error assumed when the mount's own figure was not entered, arcsec RMS.
-pub const DEFAULT_POINTING_RMS_ARCSEC: f64 = 60.0;
-
-pub mod limits {
-    /// Telescope: (half the short side of the field) / (acquisition uncertainty).
-    pub const ACQ_PASS_MARGIN: f64 = 2.0;
-    pub const ACQ_WARN_MARGIN: f64 = 1.0;
-    /// Camera: allowed timing error, as a fraction of one binned pixel of motion.
-    pub const TIMING_PIXEL_FRACTION: f64 = 0.25;
-    /// Camera: timing error up to this multiple of the requirement is a WARN, beyond it FAIL.
-    pub const TIMING_WARN_MULTIPLE: f64 = 4.0;
-    /// Camera: rolling-shutter skew below this (binned pixels) needs no correction.
-    pub const SKEW_NEGLIGIBLE_PX: f64 = 0.25;
-    /// Camera: skew larger than this fraction of the frame height distorts frame geometry.
-    pub const SKEW_FAIL_FRAME_FRACTION: f64 = 0.10;
-    /// Mount: max axis rate / required rate.
-    pub const RATE_PASS_HEADROOM: f64 = 3.0;
-    pub const RATE_WARN_HEADROOM: f64 = 1.0;
-    /// Mount: required rates above this (deg/s) need a known slew rate to judge.
-    pub const RATE_MATTERS_DEG_S: f64 = 0.1;
-    /// Mount (alt-az): highest pass elevation that can be followed without losing the target.
-    pub const KEYHOLE_PASS_ELEV_DEG: f64 = 85.0;
-    pub const KEYHOLE_WARN_ELEV_DEG: f64 = 70.0;
-}
 
 /// How a regime's targets are usually observed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -274,7 +246,7 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
         None => (DEFAULT_POINTING_RMS_ARCSEC, true),
     };
     let needed = ephem_arcsec + pointing;
-    let half_field = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * 3600.0 / 2.0;
+    let half_field = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE / 2.0;
     let margin = half_field / needed;
 
     let details = vec![
@@ -307,7 +279,7 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
 
 /// How long an untracked target stays in the field (informational).
 fn telescope_dwell(ev: &Evaluation, r: &Regime) -> RegimeCheck {
-    let short_side = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * 3600.0;
+    let short_side = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE;
     let dwell = if r.rate_vs_ground > 0.0 { short_side / r.rate_vs_ground } else { f64::INFINITY };
     let verdict = if r.rate_vs_ground == 0.0 {
         "Earth-fixed target: it stays in a stopped telescope's field indefinitely.".to_string()
@@ -361,7 +333,7 @@ fn fmt_angle(arcsec: f64) -> String {
 fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
     let binned = ev.metrics.plate_scale * ev.metrics.recommended_bin as f64;
     let required_s = limits::TIMING_PIXEL_FRACTION * binned / r.rate_vs_stars;
-    let actual_s = cfg.timestamp_accuracy_ms / 1000.0;
+    let actual_s = cfg.timestamp_accuracy_ms / MS_PER_S;
     let error_arcsec = r.rate_vs_stars * actual_s;
 
     let details = vec![
@@ -417,10 +389,10 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             verdict: "Ask the vendor for the line time to size the readout skew (skew = rows x line time).".to_string(),
         },
         Shutter::Rolling { line_time_us: Some(lt) } => {
-            let readout_s = c.height_px as f64 * lt * 1e-6;
+            let readout_s = c.height_px as f64 * lt * S_PER_US;
             let skew = r.rate_vs_stars * readout_s;
             let skew_px = skew / binned;
-            let frame_h = ev.metrics.fov_h_deg * 3600.0;
+            let frame_h = ev.metrics.fov_h_deg * ARCSEC_PER_DEGREE;
             let frac = skew / frame_h;
             let details = vec![
                 kv("Readout time, top to bottom", fmt_duration(readout_s)),
@@ -475,7 +447,7 @@ fn camera_trailing(cfg: &Config, ev: &Evaluation, r: &Regime, seeing: f64) -> Re
 
 /// Can the mount move fast enough, including the alt-az zenith keyhole?
 fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
-    let required_deg_s = r.rate_vs_ground / 3600.0;
+    let required_deg_s = r.rate_vs_ground / ARCSEC_PER_DEGREE;
     let mount = cfg.payload.mount.as_ref();
     let mut details = vec![kv("Required rate (vs ground)", fmt_rate(r.rate_vs_ground))];
 

@@ -5,23 +5,21 @@
 //! full explanation of every calculation.
 
 mod checks;
+mod constants;
 mod input;
 mod model;
 mod presets;
 mod regimes;
 mod report;
 
+use constants::{
+    DEFAULT_SEEING_ARCSEC, DEFAULT_TIMESTAMP_MS, DEFAULT_WAVELENGTH_UM, DEMO_ASSUMED_POINTING_RMS_ARCSEC,
+    GPS_TIMESTAMP_MS,
+};
 use model::{
     Camera, Capability, Config, Mount, MountType, Obstruction, Payload, Shutter, Site, SpotConvention, SpotPoint,
     SpotSpec, Telescope,
 };
-
-const DEFAULT_SEEING_ARCSEC: f64 = 2.5;
-const DEFAULT_WAVELENGTH_UM: f64 = 0.55;
-/// Typical PC clock + USB latency, ms. GPS hardware timestamping is sub-millisecond.
-const DEFAULT_TIMESTAMP_MS: f64 = 20.0;
-/// Illustrative GPS hardware timestamp accuracy used by the demo, ms.
-const GPS_TIMESTAMP_MS: f64 = 0.1;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -316,7 +314,7 @@ fn run_demo() {
         let mut m = all_mounts.iter().find(|m| m.name.contains(s)).unwrap().clone();
         // Demo assumptions: a modeled mount points to ~30" RMS. TLE tracking left as "unknown"
         // so the demo shows the vendor question it raises.
-        m.pointing_rms_arcsec = Some(30.0);
+        m.pointing_rms_arcsec = Some(DEMO_ASSUMED_POINTING_RMS_ARCSEC);
         m
     };
     let payload = |m: Mount, acc: f64| Payload { mount: Some(m), accessories_lb: acc, back_focus_required_mm: None };
