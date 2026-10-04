@@ -12,7 +12,7 @@
 use crate::checks::{kv, Evaluation, Status};
 use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
+    DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
 };
 use crate::constants::plausible_ranges as ranges;
 use crate::dynamics;
@@ -601,6 +601,92 @@ fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
     RegimeCheck { component: Component::Mount, title, status, details, verdict }
 }
 
+/// Can the mount get on target in time to use the pass?
+fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
+    let title = "Slew and settle";
+    let Some(window) = r.usable_window_s else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details: vec![kv("Usable window", "effectively unlimited".to_string())],
+            verdict: "The target stays available long enough that slew time does not compete with it."
+                .to_string(),
+        };
+    };
+    let mut details = vec![
+        kv("Usable window", format!("{window:.0} s")),
+        kv("Assumed slew distance", format!("{:.0} deg", DEFAULT_SLEW_DISTANCE_DEG)),
+    ];
+    let Some(m) = cfg.payload.mount.as_ref() else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: "No mount selected.".to_string(),
+        };
+    };
+    let rate = plausible(m.max_slew_deg_s, ranges::SLEW_RATE_MIN_DEG_S, ranges::SLEW_RATE_MAX_DEG_S);
+    let accel = plausible(m.max_accel_deg_s2, ranges::ACCEL_MIN_DEG_S2, ranges::ACCEL_MAX_DEG_S2);
+
+    match (rate, accel) {
+        (Some(v), Some(a)) => {
+            let entered = plausible(m.settle_time_s, ranges::SETTLE_MIN_S, ranges::SETTLE_MAX_S);
+            let settle = entered.unwrap_or(DEFAULT_SETTLE_TIME_S);
+            details.push(kv(
+                "Settle time",
+                match entered {
+                    Some(_) => format!("{settle:.1} s"),
+                    None => format!("{settle:.1} s (assumed)"),
+                },
+            ));
+            let slew = dynamics::slew_time_s(DEFAULT_SLEW_DISTANCE_DEG, v, a);
+            let total = slew + settle;
+            let fraction = total / window;
+            details.push(kv("Slew time", format!("{slew:.1} s")));
+            details.push(kv(
+                "Slew + settle",
+                format!("{total:.1} s  ({:.0}% of the window)", fraction * 100.0),
+            ));
+            let status = if fraction <= limits::SLEW_PASS_WINDOW_FRACTION {
+                Status::Pass
+            } else if fraction <= limits::SLEW_WARN_WINDOW_FRACTION {
+                Status::Warn
+            } else {
+                Status::Fail
+            };
+            let verdict = match status {
+                Status::Pass => "The mount is on target well inside the window.".to_string(),
+                Status::Warn => "Getting on target eats a significant part of the window.".to_string(),
+                _ => "The mount cannot get on target in time to make use of the pass.".to_string(),
+            };
+            RegimeCheck { component: Component::Mount, title, status, details, verdict }
+        }
+        (Some(v), None) => {
+            let floor = DEFAULT_SLEW_DISTANCE_DEG / v;
+            details.push(kv("Slew time", format!("at least {floor:.1} s, ignoring ramp-up")));
+            RegimeCheck {
+                component: Component::Mount,
+                title,
+                status: Status::Info,
+                details,
+                verdict: format!(
+                    "Axis acceleration for {} is unknown, so this is a lower bound only. Ask the vendor.",
+                    m.name
+                ),
+            }
+        }
+        _ => RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: format!("Maximum slew rate for {} is unknown. Ask the vendor.", m.name),
+        },
+    }
+}
+
 /// Can the control software follow a predicted path?
 fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
     let cap = cfg.payload.mount.as_ref().map(|m| m.non_sidereal_tracking);
@@ -654,6 +740,7 @@ pub fn evaluate_regimes(
                 camera_trailing(cfg, ev, &r, site.seeing_arcsec),
                 mount_rate(cfg, &r),
                 mount_acceleration(cfg, &r),
+                mount_slew_settle(cfg, &r),
                 mount_non_sidereal(cfg, &r),
             ];
             RegimeEvaluation { regime: r, checks }
@@ -775,6 +862,65 @@ mod tests {
             assert_eq!(c.status, Status::Warn, "rating {bad} was trusted");
             assert!(c.verdict.contains("unknown"), "rating {bad} was trusted");
         }
+    }
+
+    #[test]
+    fn slew_and_settle_passes_a_direct_drive_mount_on_leo() {
+        // 90 deg at 50 deg/s and 10 deg/s^2 is 6.0 s, plus 2 s of assumed
+        // settle: 8 s of a 300 s window, under 3%.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn slew_and_settle_fails_a_mount_that_cannot_get_there_in_time() {
+        let mut m = l350(Some(0.05));
+        m.max_slew_deg_s = Some(1.0);
+        let (cfg, site) = fixture(Some(m));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn slew_and_settle_is_info_where_the_window_is_unlimited() {
+        for key in ["MEO", "GEO", "HEO", "CIS"] {
+            let (cfg, site) = fixture(Some(l350(Some(10.0))));
+            let c = check_for(key, "Slew and settle", &cfg, &site);
+            assert_eq!(c.status, Status::Info, "{key} should not be window-constrained");
+        }
+    }
+
+    #[test]
+    fn slew_and_settle_reports_a_lower_bound_when_acceleration_is_unknown() {
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+        assert!(c.verdict.contains("lower bound"));
+    }
+
+    #[test]
+    fn slew_and_settle_names_the_settle_time_as_assumed() {
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("assumed")));
+    }
+
+    #[test]
+    fn slew_and_settle_uses_an_entered_settle_time() {
+        let mut m = l350(Some(10.0));
+        m.settle_time_s = Some(45.0);
+        let (cfg, site) = fixture(Some(m));
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        // 6 s of slew plus 45 s of settle is 17% of a 300 s window: a WARN.
+        assert_eq!(c.status, Status::Warn);
+    }
+
+    #[test]
+    fn slew_and_settle_is_info_with_no_mount() {
+        let (cfg, site) = fixture(None);
+        let c = check_for("LEO", "Slew and settle", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
     }
 
     #[test]
