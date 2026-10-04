@@ -264,10 +264,10 @@ fn ask_orbit_source() -> OrbitSource {
     }
 }
 
-fn build_propagator(source: OrbitSource, start: Epoch) -> Result<Box<dyn Propagator>, OrbitPropError> {
+fn build_propagator(source: OrbitSource, start: Epoch, end: Epoch) -> Result<Box<dyn Propagator>, OrbitPropError> {
     match source {
         OrbitSource::Tle(tle) => {
-            if let Some(note) = passes_report::stale_tle_note(&tle.epoch, &start) {
+            if let Some(note) = passes_report::stale_tle_note(&tle.epoch, &start, &end) {
                 println!("\n  {note}");
             }
             Ok(Box::new(Sgp4Propagator::new(&tle)?))
@@ -313,14 +313,15 @@ fn run_pass_prediction(site: &mut Site, configs: &[Config]) {
         }
         println!("  Enter an elevation below 90 degrees.");
     };
-    let prop = match build_propagator(source, start) {
+    let end = start.add_seconds(hours * 3600.0);
+    let prop = match build_propagator(source, start, end) {
         Ok(p) => p,
         Err(e) => {
             println!("\n  {e}");
             return;
         }
     };
-    let search = PassSearch { start, end: start.add_seconds(hours * 3600.0), min_el_deg };
+    let search = PassSearch { start, end, min_el_deg };
     println!("\nSearching {hours:.0} h from {start} ...");
     let result = find_passes(prop.as_ref(), &location, &search);
     passes_report::print_passes(prop.label(), &result, configs);

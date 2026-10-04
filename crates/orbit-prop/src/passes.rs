@@ -12,7 +12,7 @@
 //! A pass shorter than the coarse step can be missed. For LEO that means
 //! grazing passes that never get far above the minimum elevation.
 
-use crate::constants::{DARK_SUN_ELEVATION_DEG, MAX_SEARCH_WINDOW_S};
+use crate::constants::{DARK_SUN_ELEVATION_DEG, EARTH_ROTATION_RAD_S, MAX_SEARCH_WINDOW_S};
 use crate::error::OrbitPropError;
 use crate::illumination::{lighting, sun_elevation_deg, Lighting};
 use crate::observe::{observe, Observation};
@@ -203,7 +203,28 @@ impl Peaks {
             self.ha_acc = self.ha_acc.max(d(|o| o.ha_rate_deg_s));
             self.dec_acc = self.dec_acc.max(d(|o| o.dec_rate_deg_s));
         }
+        // Through the zenith (alt-az) or the celestial pole (equatorial) the
+        // analytic axis rate is near 0 on both sides of an instantaneous
+        // 180 deg flip. Finite differences of the angles themselves catch
+        // the flip, so the larger of the two is reported.
+        let sidereal_deg_s = EARTH_ROTATION_RAD_S.to_degrees();
+        let az_fd: Vec<f64> = obs.windows(2).map(|w| wrap_deg(w[1].az_deg - w[0].az_deg) / dt).collect();
+        let ha_fd: Vec<f64> =
+            obs.windows(2).map(|w| sidereal_deg_s - wrap_deg(w[1].ra_deg - w[0].ra_deg) / dt).collect();
+        for (fd, rate, acc) in [(&az_fd, &mut self.az, &mut self.az_acc), (&ha_fd, &mut self.ha, &mut self.ha_acc)] {
+            for r in fd {
+                *rate = rate.max(r.abs());
+            }
+            for w in fd.windows(2) {
+                *acc = acc.max(((w[1] - w[0]) / dt).abs());
+            }
+        }
     }
+}
+
+/// An angle difference wrapped into `[-180, 180)` degrees.
+fn wrap_deg(d: f64) -> f64 {
+    (d + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// Evenly spaced times from `a` to `b` inclusive, no further apart than `max_step`.
@@ -393,6 +414,31 @@ mod tests {
         // At the zenith the ground rate is (a * omega) / h.
         let expected = 0.06 * (EARTH_RADIUS_KM + 500.0) / 500.0;
         assert!((p.peak_rate_vs_ground_deg_s - expected).abs() / expected < 1e-3, "{}", p.peak_rate_vs_ground_deg_s);
+    }
+
+    #[test]
+    fn exact_zenith_pass_reports_the_azimuth_flip() {
+        // Straight through the zenith the analytic azimuth rate is 0 on both
+        // sides, but the azimuth axis must flip 180 deg at culmination. The
+        // peak must show that, or an alt-az mount gets a false PASS.
+        let sat = EarthFixedCircle { radius_km: EARTH_RADIUS_KM + 500.0, lon0_deg: -30.0, rate_deg_s: 0.06, fail_after_s: None };
+        let p = &find_passes(&sat, &equator(), &search(1.0, 10.0)).passes[0];
+        assert!(p.peak_az_rate_deg_s > 100.0, "az rate {}", p.peak_az_rate_deg_s);
+        assert!(p.peak_az_accel_deg_s2 > 100.0, "az accel {}", p.peak_az_accel_deg_s2);
+    }
+
+    #[test]
+    fn pass_over_the_celestial_pole_reports_the_hour_angle_flip() {
+        // From the South Pole a polar orbit crosses the zenith, which is the
+        // celestial pole, so an equatorial mount's hour-angle axis flips.
+        use crate::keplerian::{KeplerElements, KeplerJ2};
+        let el = KeplerElements::from_altitudes(t0(), 800.0, 800.0, 90.0, 0.0, 0.0, 0.0).unwrap();
+        let prop = KeplerJ2::new(el, "polar").unwrap();
+        let site = GroundSite::new(-90.0, 0.0, 2835.0).unwrap();
+        let r = find_passes(&prop, &site, &search(24.0, 10.0));
+        let p = r.passes.iter().max_by(|a, b| a.max_el_deg.total_cmp(&b.max_el_deg)).unwrap();
+        assert!(p.max_el_deg > 89.9, "max el {}", p.max_el_deg);
+        assert!(p.peak_ha_rate_deg_s > 100.0, "HA rate {}", p.peak_ha_rate_deg_s);
     }
 
     #[test]

@@ -94,13 +94,13 @@ pub fn judge_mount_for_pass(m: &Mount, p: &Pass) -> (Status, String) {
     if accel.0 > rate.0 { accel } else { rate }
 }
 
-/// A warning when the TLE's epoch is far from the search start, because
-/// SGP4 errors grow quickly with element age.
-pub fn stale_tle_note(tle_epoch: &Epoch, start: &Epoch) -> Option<String> {
-    let age_days = start.seconds_since(tle_epoch).abs() / 86_400.0;
+/// A warning when any part of the search window is far from the TLE's
+/// epoch, because SGP4 errors grow quickly with element age.
+pub fn stale_tle_note(tle_epoch: &Epoch, start: &Epoch, end: &Epoch) -> Option<String> {
+    let age_days = start.seconds_since(tle_epoch).abs().max(end.seconds_since(tle_epoch).abs()) / 86_400.0;
     (age_days > STALE_TLE_DAYS).then(|| {
         format!(
-            "Note: this TLE's epoch ({tle_epoch}) is {age_days:.0} days from the search start.\n  SGP4 errors grow quickly with age; pass times may be off by minutes."
+            "Note: parts of the search window are up to {age_days:.0} days from this TLE's epoch ({tle_epoch}).\n  SGP4 errors grow quickly with age; pass times may be off by minutes."
         )
     })
 }
@@ -300,11 +300,19 @@ mod tests {
     #[test]
     fn stale_tle_is_flagged_after_two_weeks() {
         let epoch = Epoch::from_utc(2026, 10, 1, 0, 0, 0.0).unwrap();
-        assert_eq!(stale_tle_note(&epoch, &epoch.add_seconds(13.0 * 86_400.0)), None);
-        let note = stale_tle_note(&epoch, &epoch.add_seconds(40.0 * 86_400.0)).unwrap();
+        assert_eq!(stale_tle_note(&epoch, &epoch.add_seconds(13.0 * 86_400.0), &epoch.add_seconds(13.0 * 86_400.0)), None);
+        let note = stale_tle_note(&epoch, &epoch.add_seconds(40.0 * 86_400.0), &epoch.add_seconds(40.0 * 86_400.0)).unwrap();
         assert!(note.contains("40 days"), "{note}");
         // A search far before the epoch is just as stale.
-        assert!(stale_tle_note(&epoch, &epoch.add_seconds(-20.0 * 86_400.0)).is_some());
+        assert!(stale_tle_note(&epoch, &epoch.add_seconds(-20.0 * 86_400.0), &epoch).is_some());
+    }
+
+    #[test]
+    fn long_search_from_a_fresh_tle_is_flagged_by_its_far_end() {
+        // Fresh at the start, 30 days old by the end: the late passes are stale.
+        let epoch = Epoch::from_utc(2026, 10, 1, 0, 0, 0.0).unwrap();
+        let note = stale_tle_note(&epoch, &epoch, &epoch.add_seconds(30.0 * 86_400.0)).unwrap();
+        assert!(note.contains("30 days"), "{note}");
     }
 
     #[test]

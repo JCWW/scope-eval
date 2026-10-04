@@ -816,7 +816,7 @@ You enter:
 
 1. **Your site's location**: latitude (north positive), longitude (east positive) and altitude in metres. It is asked for once and can be changed under **Change site conditions**.
 2. **The orbit**, one of:
-   * *Paste a TLE* from CelesTrak or Space-Track (two lines, or three with a name line first). It is propagated with SGP4, the model TLEs are fitted with. If the TLE's epoch is more than 14 days from the search start, the tool warns that pass times may be off by minutes.
+   * *Paste a TLE* from CelesTrak or Space-Track (two lines, or three with a name line first). It is propagated with SGP4, the model TLEs are fitted with. If any part of the search window is more than 14 days from the TLE's epoch, the tool warns that pass times may be off by minutes.
    * *Define a what-if orbit*: perigee and apogee altitude, inclination, right ascension of the ascending node, argument of perigee and mean anomaly. It is propagated as a Keplerian orbit with J2 drift, which is right for "what would a 550 km, 53 degree orbit look like from here" but not for tracking a particular object.
 3. **The window**: start time in UTC (blank for now), length (24 hours by default, 720 at most) and minimum elevation (10 degrees by default).
 
@@ -825,11 +825,11 @@ Example, the what-if orbit 550 km at 53 degrees from 40 N 75 W with a PlaneWave 
 ```
  #  Rise (UTC)            Set (UTC)  Duration MaxEl  Az rate El rate Sunlit  Dark     | Mount 1
  1  2026-10-04 04:56:04 04:58:50     2m45s  11.4   0.245   0.032 no      yes      | [PASS] az rate 203.8x
- 2  2026-10-04 06:32:15 06:40:37     8m22s  86.3  11.603   0.686 no      yes      | [WARN] az accel 1.3x
+ 2  2026-10-04 06:32:15 06:40:37     8m22s  86.3  11.604   0.686 no      yes      | [WARN] az accel 1.3x
  3  2026-10-04 08:13:07 08:19:47     6m40s  22.3   0.366   0.080 partial yes      | [PASS] az rate 136.5x
 ```
 
-* **Az rate, El rate** are the peak axis rates an alt-az mount needs during the pass, in deg/s. Pass 2 culminates at 86 degrees, so its azimuth axis has to swing 11.6 deg/s near the zenith: the alt-az keyhole, computed from the real pass rather than from a formula.
+* **Az rate, El rate** are the peak axis rates an alt-az mount needs during the pass, in deg/s. Pass 2 culminates at 86 degrees, so its azimuth axis has to swing 11.6 deg/s near the zenith: the alt-az keyhole, computed from the real pass rather than from a formula. A pass straight through the zenith needs an instantaneous 180-degree azimuth flip; the table reports it as the flip divided by the 0.1 s sampling step (about 1800 deg/s), which fails every alt-az mount. An equatorial mount has the same problem at the celestial pole on its hour-angle axis.
 * **Sunlit** says whether the satellite is in sunlight (yes, partial, no). An optical sensor sees only sunlit satellites.
 * **Dark** says whether the Sun is more than 12 degrees below your horizon (yes, twilight, no).
 * **Mount N** compares the pass's peak axis rate and acceleration with the mount's ratings, using the thresholds of the regime mount checks (`RATE_PASS_HEADROOM`, `ACCEL_PASS_HEADROOM` and the rest in `src/constants.rs`). The note names the axis and quantity that bind and their headroom. An equatorial mount is judged on its hour-angle and declination axes. A rating that is unknown gives WARN when the pass needs real speed and INFO when it doesn't.
