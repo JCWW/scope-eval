@@ -6,6 +6,7 @@
 
 mod checks;
 mod constants;
+mod dynamics;
 mod input;
 mod model;
 mod photometry;
