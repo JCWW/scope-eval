@@ -78,6 +78,8 @@ pub(crate) struct TelescopeDto {
     image_circle_mm: f64,
     back_focus_mm: Option<f64>,
     weight_lb: Option<f64>,
+    #[serde(default)]
+    throughput: Option<f64>,
     spot: Option<SpotSpecDto>,
     source: String,
 }
@@ -92,6 +94,7 @@ impl From<TelescopeDto> for Telescope {
             image_circle_mm: dto.image_circle_mm,
             back_focus_mm: dto.back_focus_mm,
             weight_lb: dto.weight_lb,
+            throughput: dto.throughput,
             spot: dto.spot.map(Into::into),
             source: dto.source,
         }

@@ -65,6 +65,7 @@ fn run_interactive() {
     let mut site = Site {
         seeing_arcsec: input::ask_positive("\nTypical seeing FWHM at your site, arcsec", Some(DEFAULT_SEEING_ARCSEC)),
         wavelength_um: DEFAULT_WAVELENGTH_UM,
+        sky_mag_arcsec2: None,
     };
     let mut configs: Vec<Config> = Vec::new();
 
@@ -171,7 +172,15 @@ fn build_config() -> Config {
 
     let default_label = format!("{} + {}", short_name(&telescope.name), short_name(&camera.name));
     let label = input::ask_text("Label for this configuration", &default_label);
-    Config { label, telescope, camera, payload, timestamp_accuracy_ms }
+    Config {
+        label,
+        telescope,
+        camera,
+        payload,
+        timestamp_accuracy_ms,
+        target_mag_override: None,
+        exposure_override_s: None,
+    }
 }
 
 fn ask_capability(prompt: &str) -> Capability {
@@ -198,6 +207,8 @@ fn custom_mount() -> Mount {
         mount_type,
         capacity_lb: input::ask_optional("Rated payload, lb", false),
         max_slew_deg_s: input::ask_optional("Maximum slew rate, deg/s", false),
+        max_accel_deg_s2: None,
+        settle_time_s: None,
         pointing_rms_arcsec: input::ask_optional("Pointing accuracy after modeling, arcsec RMS", false),
         non_sidereal_tracking: ask_capability("Can its software track a satellite from a TLE (non-sidereal)?"),
         source: "User-entered".into(),
@@ -277,6 +288,7 @@ fn custom_telescope() -> Telescope {
         image_circle_mm,
         back_focus_mm,
         weight_lb,
+        throughput: None,
         spot,
         source: "User-entered".into(),
     }
@@ -297,12 +309,26 @@ fn custom_camera() -> Camera {
         _ => Shutter::Global,
     };
     let weight_lb = input::ask_optional("Camera weight, lb", false);
-    Camera { name, pixel_um, width_px, height_px, read_noise_e, shutter, weight_lb, source: "User-entered".into() }
+    Camera {
+        name,
+        pixel_um,
+        width_px,
+        height_px,
+        read_noise_e,
+        qe: None,
+        shutter,
+        weight_lb,
+        source: "User-entered".into(),
+    }
 }
 
 /// Non-interactive comparison of the presets, useful as a worked example.
 fn run_demo() {
-    let site = Site { seeing_arcsec: DEFAULT_SEEING_ARCSEC, wavelength_um: DEFAULT_WAVELENGTH_UM };
+    let site = Site {
+        seeing_arcsec: DEFAULT_SEEING_ARCSEC,
+        wavelength_um: DEFAULT_WAVELENGTH_UM,
+        sky_mag_arcsec2: None,
+    };
     let scopes = presets::telescopes();
     let cams = presets::cameras();
     let find = |s: &str| scopes.iter().find(|t| t.name.contains(s)).unwrap().clone();
@@ -319,49 +345,23 @@ fn run_demo() {
     };
     let payload = |m: Mount, acc: f64| Payload { mount: Some(m), accessories_lb: acc, back_focus_required_mm: None };
 
+    let cfg = |label: &str, telescope: Telescope, camera: Camera, payload: Payload| Config {
+        label: label.into(),
+        telescope,
+        camera,
+        payload,
+        timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
+        target_mag_override: None,
+        exposure_override_s: None,
+    };
+
     let configs = vec![
-        Config {
-            label: "DeltaRho 350 + IMX455".into(),
-            telescope: find("DeltaRho 350"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-350"), 10.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "RASA 11 + IMX455".into(),
-            telescope: find("RASA 11"),
-            camera: imx455.clone(),
-            payload: payload(mount("HAE69"), 5.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "CDK14 + IMX455".into(),
-            telescope: find("CDK14"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-350"), 10.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "CDK17 + IMX455".into(),
-            telescope: find("CDK17"),
-            camera: imx455.clone(),
-            payload: payload(mount("L-500"), 15.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "DeltaRho 500 + IMX461".into(),
-            telescope: find("DeltaRho 500"),
-            camera: imx461,
-            payload: payload(mount("L-500"), 15.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
-        Config {
-            label: "RASA 11 + IMX174 (global)".into(),
-            telescope: find("RASA 11"),
-            camera: imx174,
-            payload: payload(mount("L-350"), 5.0),
-            timestamp_accuracy_ms: GPS_TIMESTAMP_MS,
-        },
+        cfg("DeltaRho 350 + IMX455", find("DeltaRho 350"), imx455.clone(), payload(mount("L-350"), 10.0)),
+        cfg("RASA 11 + IMX455", find("RASA 11"), imx455.clone(), payload(mount("HAE69"), 5.0)),
+        cfg("CDK14 + IMX455", find("CDK14"), imx455.clone(), payload(mount("L-350"), 10.0)),
+        cfg("CDK17 + IMX455", find("CDK17"), imx455.clone(), payload(mount("L-500"), 15.0)),
+        cfg("DeltaRho 500 + IMX461", find("DeltaRho 500"), imx461, payload(mount("L-500"), 15.0)),
+        cfg("RASA 11 + IMX174 (global)", find("RASA 11"), imx174, payload(mount("L-350"), 5.0)),
     ];
 
     println!("scope-eval demo: built-in presets, seeing {:.1}\"", site.seeing_arcsec);

@@ -23,6 +23,21 @@ pub const MU_EARTH: f64 = 398_600.4418;
 pub const EARTH_RADIUS_KM: f64 = 6_378.137;
 /// One full circle in arcseconds.
 pub const ARCSEC_PER_CIRCLE: f64 = 1_296_000.0;
+/// Peak of the second derivative of `atan(v t / h)`, in units of `(v/h)^2`.
+///
+/// An overhead pass has `theta(t) = atan(v t / h)`, so with `u = v t / h`,
+/// `theta'' = -2 (v/h)^2 u / (1 + u^2)^2`. That peaks at `u = 1/sqrt(3)`,
+/// giving `(2/sqrt(3)) / (4/3)^2 = 3 sqrt(3) / 8`. A derived constant, not a
+/// tuned threshold. See README.md.
+pub const PEAK_ACCEL_COEFF: f64 = 0.649_519_052_838_329;
+/// Apparent V magnitude of the Sun.
+pub const SUN_APPARENT_MAG: f64 = -26.74;
+/// Photons per square metre per second from a magnitude-zero source in V band.
+///
+/// From the V-band zero point 3.64e-23 W/m^2/Hz over a 550 nm band of width
+/// 89 nm (8.82e13 Hz), giving 3.21e-9 W/m^2, divided by the 3.61e-19 J energy
+/// of a 550 nm photon.
+pub const PHOTONS_M2_S_MAG0: f64 = 8.9e9;
 
 // ---------------------------------------------------------------------------
 // Unit conversions
@@ -42,6 +57,8 @@ pub const S_PER_US: f64 = 1e-6;
 pub const MS_PER_S: f64 = 1000.0;
 /// Kilograms in one pound.
 pub const KG_PER_LB: f64 = 0.4536;
+/// Metres in one kilometre.
+pub const M_PER_KM: f64 = 1000.0;
 
 // ---------------------------------------------------------------------------
 // Default assumptions, used when a spec sheet doesn't say
@@ -61,6 +78,26 @@ pub const GPS_TIMESTAMP_MS: f64 = 0.1;
 pub const DEMO_ASSUMED_POINTING_RMS_ARCSEC: f64 = 30.0;
 /// Illustrative timing-error interval used to show its positional effect, seconds (= 10 ms).
 pub const TIMING_ERROR_EXAMPLE_S: f64 = 0.010;
+/// Cross-sectional area of the representative target, m^2.
+pub const REFERENCE_TARGET_CROSS_SECTION_M2: f64 = 10.0;
+/// Albedo of the representative target.
+pub const REFERENCE_TARGET_ALBEDO: f64 = 0.2;
+/// Phase factor assumed for the representative target: full phase, phi = 0.
+pub const DEFAULT_PHASE_FACTOR: f64 = 1.0;
+/// Peak quantum efficiency assumed when not entered: generic back-illuminated CMOS.
+pub const DEFAULT_QE: f64 = 0.80;
+/// Optical throughput assumed when not entered: generic coated two-mirror train.
+pub const DEFAULT_THROUGHPUT: f64 = 0.85;
+/// Sky background assumed when not entered, V mag per square arcsec: rural site.
+pub const DEFAULT_SKY_MAG_ARCSEC2: f64 = 21.0;
+/// Read noise assumed when not entered, electrons RMS: generic CMOS.
+pub const DEFAULT_READ_NOISE_E: f64 = 3.0;
+/// Longest exposure the tool will derive, seconds. Caps the stationary-target case.
+pub const MAX_EXPOSURE_S: f64 = 30.0;
+/// Acquisition slew distance assumed by the slew-and-settle check, degrees.
+pub const DEFAULT_SLEW_DISTANCE_DEG: f64 = 90.0;
+/// Settle time assumed when not entered, seconds.
+pub const DEFAULT_SETTLE_TIME_S: f64 = 2.0;
 
 // ---------------------------------------------------------------------------
 // Judgment thresholds. These are engineering rules of thumb, not physics.
@@ -117,4 +154,51 @@ pub mod regimes_limits {
     /// Mount (alt-az): highest pass elevation that can be followed without losing the target.
     pub const KEYHOLE_PASS_ELEV_DEG: f64 = 85.0;
     pub const KEYHOLE_WARN_ELEV_DEG: f64 = 70.0;
+    /// System: SNR at which a target counts as detected.
+    pub const DETECT_SNR_THRESHOLD: f64 = 5.0;
+    /// System: SNR for comfortable detection.
+    pub const SNR_PASS: f64 = 10.0;
+    /// System: above this SNR, detection is simply not what limits the regime.
+    pub const SNR_TRIVIAL: f64 = 100.0;
+    /// Mount: required accelerations above this (deg/s^2) need a known rating to judge.
+    ///
+    /// Set between LEO (0.008627 deg/s^2) and MEO (1.37e-6 deg/s^2) so that LEO
+    /// alone trips the Warn branch. A value of 0.01 would sit above LEO's own
+    /// requirement and the branch would be unreachable.
+    pub const ACCEL_MATTERS_DEG_S2: f64 = 0.005;
+    /// Mount: max axis acceleration / required acceleration.
+    pub const ACCEL_PASS_HEADROOM: f64 = 3.0;
+    pub const ACCEL_WARN_HEADROOM: f64 = 1.0;
+    /// Mount: slew + settle as a fraction of the regime's usable window.
+    pub const SLEW_PASS_WINDOW_FRACTION: f64 = 0.10;
+    pub const SLEW_WARN_WINDOW_FRACTION: f64 = 0.25;
+}
+
+/// Plausible ranges for hand-entered inputs.
+///
+/// `presets.yaml` is edited by hand and nothing else validates it. A value
+/// outside these ranges is treated as not entered rather than trusted, so a
+/// typo degrades the report instead of corrupting it. See `model::plausible`.
+pub mod plausible_ranges {
+    /// Quantum efficiency and optical throughput are fractions of 1.
+    pub const QE_MIN: f64 = 0.01;
+    pub const QE_MAX: f64 = 1.0;
+    pub const THROUGHPUT_MIN: f64 = 0.01;
+    pub const THROUGHPUT_MAX: f64 = 1.0;
+    /// Sky surface brightness, V mag per square arcsec. Below 15 is daylight,
+    /// above 24 is darker than any real sky.
+    pub const SKY_MAG_MIN: f64 = 15.0;
+    pub const SKY_MAG_MAX: f64 = 24.0;
+    /// Read noise, electrons RMS.
+    pub const READ_NOISE_MIN: f64 = 0.1;
+    pub const READ_NOISE_MAX: f64 = 100.0;
+    /// Mount axis acceleration, deg/s^2.
+    pub const ACCEL_MIN_DEG_S2: f64 = 1e-4;
+    pub const ACCEL_MAX_DEG_S2: f64 = 1000.0;
+    /// Mount axis rate, deg/s.
+    pub const SLEW_RATE_MIN_DEG_S: f64 = 1e-3;
+    pub const SLEW_RATE_MAX_DEG_S: f64 = 1000.0;
+    /// Settle time, seconds. Zero is allowed: it means no settle.
+    pub const SETTLE_MIN_S: f64 = 0.0;
+    pub const SETTLE_MAX_S: f64 = 600.0;
 }

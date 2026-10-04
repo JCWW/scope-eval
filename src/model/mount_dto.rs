@@ -30,6 +30,10 @@ pub(crate) struct MountDto {
     mount_type: MountTypeDto,
     capacity_lb: Option<f64>,
     max_slew_deg_s: Option<f64>,
+    #[serde(default)]
+    max_accel_deg_s2: Option<f64>,
+    #[serde(default)]
+    settle_time_s: Option<f64>,
     pointing_rms_arcsec: Option<f64>,
     /// `true`/`false` if known, otherwise omitted or `null`.
     #[serde(default)]
@@ -44,6 +48,8 @@ impl From<MountDto> for Mount {
             mount_type: dto.mount_type.into(),
             capacity_lb: dto.capacity_lb,
             max_slew_deg_s: dto.max_slew_deg_s,
+            max_accel_deg_s2: dto.max_accel_deg_s2,
+            settle_time_s: dto.settle_time_s,
             pointing_rms_arcsec: dto.pointing_rms_arcsec,
             non_sidereal_tracking: match dto.non_sidereal_tracking {
                 Some(true) => Capability::Yes,

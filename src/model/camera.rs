@@ -15,8 +15,11 @@ pub struct Camera {
     pub pixel_um: f64,
     pub width_px: u32,
     pub height_px: u32,
-    /// Read noise per pixel readout, electrons RMS (optional, illustrative only).
+    /// Read noise per pixel readout, electrons RMS. `None` means not entered.
+    /// Used by the detection check in `regimes.rs`.
     pub read_noise_e: Option<f64>,
+    /// Peak quantum efficiency, as a fraction from 0 to 1. `None` means not entered.
+    pub qe: Option<f64>,
     pub shutter: Shutter,
     /// Camera weight, lb.
     pub weight_lb: Option<f64>,
