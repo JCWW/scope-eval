@@ -7,8 +7,13 @@ description = "Interactive calculator that evaluates a telescope + camera pairin
 license = "MIT"
 
 [dependencies]
+orbit-prop = { path = "crates/orbit-prop" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+
+[workspace]
+members = [".", "crates/orbit-prop"]
+default-members = [".", "crates/orbit-prop"]
 
 [profile.release]
 opt-level = 3

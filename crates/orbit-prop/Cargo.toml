@@ -1,0 +1,9 @@
+[package]
+name = "orbit-prop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Satellite propagation (SGP4 and Keplerian + J2) and ground-site observation geometry"
+license = "MIT"
+
+[dependencies]

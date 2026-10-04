@@ -17,10 +17,9 @@ pub const DEG_PER_RADIAN: f64 = 180.0 / PI;
 pub const SIDEREAL_RATE_ARCSEC_PER_S: f64 = 1_296_000.0 / 86_164.0905;
 /// For a round Gaussian blur, FWHM = 2*sqrt(ln 2) * (RMS radius) = 1.665 * RMS radius.
 pub const FWHM_PER_RMS_RADIUS: f64 = 1.665_109;
-/// Earth's gravitational parameter, km^3/s^2.
-pub const MU_EARTH: f64 = 398_600.4418;
-/// Earth's equatorial radius, km.
-pub const EARTH_RADIUS_KM: f64 = 6_378.137;
+/// Earth's gravitational parameter (km^3/s^2) and equatorial radius (km),
+/// shared with the `orbit-prop` library so the two can never disagree.
+pub use orbit_prop::constants::{EARTH_RADIUS_KM, MU_EARTH};
 /// One full circle in arcseconds.
 pub const ARCSEC_PER_CIRCLE: f64 = 1_296_000.0;
 /// Peak of the second derivative of `atan(v t / h)`, in units of `(v/h)^2`.
