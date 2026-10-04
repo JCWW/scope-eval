@@ -514,12 +514,22 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
 
     match m.mount_type {
         MountType::AltAz => {
-            // Near the zenith the azimuth rate is about omega / (zenith distance in radians).
+            // Near the zenith the azimuth axis must sweep through the same
+            // atan form as the pass itself, so both the rate and the
+            // acceleration limits constrain the same keyhole. Report whichever
+            // binds; with acceleration unknown that is the rate limit, which
+            // is what this check reported before acceleration was modelled.
             let omega_rad = required_deg_s.to_radians();
-            let max_rad = max.to_radians();
-            let z_min_deg = (omega_rad / max_rad).to_degrees();
-            let elev = 90.0 - z_min_deg;
+            let accel_rad = plausible(
+                m.max_accel_deg_s2,
+                ranges::ACCEL_MIN_DEG_S2,
+                ranges::ACCEL_MAX_DEG_S2,
+            )
+            .map(f64::to_radians);
+            let (z_min_rad, binding) = dynamics::keyhole_rad(omega_rad, max.to_radians(), accel_rad);
+            let elev = 90.0 - z_min_rad.to_degrees();
             details.push(kv("Highest pass followable (alt-az keyhole)", format!("{elev:.1} deg elevation")));
+            details.push(kv("Keyhole set by", format!("{binding} limit")));
             let k = if elev >= limits::KEYHOLE_PASS_ELEV_DEG {
                 Status::Pass
             } else if elev >= limits::KEYHOLE_WARN_ELEV_DEG {
@@ -921,6 +931,56 @@ mod tests {
         let (cfg, site) = fixture(None);
         let c = check_for("LEO", "Slew and settle", &cfg, &site);
         assert_eq!(c.status, Status::Info);
+    }
+
+    /// The keyhole elevation a check reported, parsed back out of its details.
+    fn keyhole_elev(cfg: &Config, site: &Site) -> f64 {
+        let c = check_for("LEO", "Tracking rate", cfg, site);
+        let line = c
+            .details
+            .iter()
+            .find(|d| d.contains("keyhole"))
+            .expect("keyhole detail");
+        line.split_whitespace()
+            .find_map(|w| w.parse::<f64>().ok())
+            .expect("a number in the keyhole detail")
+    }
+
+    #[test]
+    fn keyhole_unchanged_when_acceleration_is_unknown() {
+        // The guarantee: 0.87234 deg/s against a 50 deg/s axis gives a 1.0 deg
+        // keyhole, so 89.0 deg of elevation -- exactly what this tool reported
+        // before acceleration was modelled.
+        let (cfg, site) = fixture(Some(l350(None)));
+        assert!(close(keyhole_elev(&cfg, &site), 89.0, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("rate limit")));
+    }
+
+    #[test]
+    fn keyhole_unchanged_when_acceleration_is_nonsense() {
+        for bad in [0.0, -5.0, f64::NAN] {
+            let (cfg, site) = fixture(Some(l350(Some(bad))));
+            assert!(close(keyhole_elev(&cfg, &site), 89.0, 0.05), "rating {bad} moved the keyhole");
+        }
+    }
+
+    #[test]
+    fn keyhole_tightens_when_acceleration_is_known() {
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        assert!(close(keyhole_elev(&cfg, &site), 88.32, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("acceleration limit")));
+    }
+
+    #[test]
+    fn a_low_acceleration_rating_warns_on_the_keyhole() {
+        // 0.5 deg/s^2 pushes the keyhole to 82.5 deg, below
+        // KEYHOLE_WARN_ELEV_DEG, so the check can no longer pass.
+        let (cfg, site) = fixture(Some(l350(Some(0.5))));
+        assert!(close(keyhole_elev(&cfg, &site), 82.48, 0.05));
+        let c = check_for("LEO", "Tracking rate", &cfg, &site);
+        assert!(c.status >= Status::Warn);
     }
 
     #[test]
