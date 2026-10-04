@@ -12,9 +12,11 @@
 use crate::checks::{kv, Evaluation, Status};
 use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_CIRCLE, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
+    DEG_PER_RADIAN, EARTH_RADIUS_KM, MS_PER_S, MU_EARTH, S_PER_US, SIDEREAL_RATE_ARCSEC_PER_S,
 };
-use crate::model::{Capability, Config, MountType, Shutter, Site};
+use crate::constants::plausible_ranges as ranges;
+use crate::dynamics;
+use crate::model::{plausible, Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -541,6 +543,64 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
     RegimeCheck { component: Component::Mount, title: "Tracking rate", status, details, verdict }
 }
 
+/// Can the mount accelerate fast enough to follow the pass?
+fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
+    let title = "Acceleration";
+    let omega_rad_s = r.rate_vs_ground / ARCSEC_PER_RADIAN;
+    let required = dynamics::peak_tracking_accel_rad_s2(omega_rad_s) * DEG_PER_RADIAN;
+    let mut details = vec![kv("Required peak acceleration", format!("{required:.5} deg/s^2"))];
+
+    if r.mode == TrackingMode::Stare {
+        details.push(kv("Mode", "stare: tracking off".to_string()));
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Pass,
+            details,
+            verdict: "The target is Earth-fixed. The mount never has to accelerate to follow it."
+                .to_string(),
+        };
+    }
+
+    let Some(m) = cfg.payload.mount.as_ref() else {
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status: Status::Info,
+            details,
+            verdict: "No mount selected.".to_string(),
+        };
+    };
+
+    let Some(max) = plausible(m.max_accel_deg_s2, ranges::ACCEL_MIN_DEG_S2, ranges::ACCEL_MAX_DEG_S2)
+    else {
+        let status = if required > limits::ACCEL_MATTERS_DEG_S2 { Status::Warn } else { Status::Info };
+        return RegimeCheck {
+            component: Component::Mount,
+            title,
+            status,
+            details,
+            verdict: format!("Maximum axis acceleration for {} is unknown. Ask the vendor.", m.name),
+        };
+    };
+
+    let headroom = max / required;
+    details.push(kv("Mount maximum acceleration", format!("{max:.3} deg/s^2  (headroom {headroom:.0}x)")));
+    let status = if headroom >= limits::ACCEL_PASS_HEADROOM {
+        Status::Pass
+    } else if headroom >= limits::ACCEL_WARN_HEADROOM {
+        Status::Warn
+    } else {
+        Status::Fail
+    };
+    let verdict = match status {
+        Status::Pass => "Ample acceleration headroom.".to_string(),
+        Status::Warn => "The mount can just accelerate fast enough, with little margin for corrections.".to_string(),
+        _ => "The mount cannot accelerate fast enough to follow the pass.".to_string(),
+    };
+    RegimeCheck { component: Component::Mount, title, status, details, verdict }
+}
+
 /// Can the control software follow a predicted path?
 fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
     let cap = cfg.payload.mount.as_ref().map(|m| m.non_sidereal_tracking);
@@ -593,6 +653,7 @@ pub fn evaluate_regimes(
                 camera_shutter(cfg, ev, &r),
                 camera_trailing(cfg, ev, &r, site.seeing_arcsec),
                 mount_rate(cfg, &r),
+                mount_acceleration(cfg, &r),
                 mount_non_sidereal(cfg, &r),
             ];
             RegimeEvaluation { regime: r, checks }
@@ -606,6 +667,121 @@ mod tests {
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    // Site arrives via `use super::*`; Mount and Payload are not imported at
+    // module level and the fixtures need both (pre-flight ruling).
+    use crate::model::{Mount, Payload};
+
+    /// DeltaRho 350 + IMX455 on an L-350, the configuration every worked
+    /// example in README.md uses.
+    fn fixture(mount: Option<Mount>) -> (Config, Site) {
+        let telescope = crate::presets::telescopes()
+            .into_iter()
+            .find(|t| t.name.contains("DeltaRho 350"))
+            .expect("DeltaRho 350 preset");
+        let camera = crate::presets::cameras()
+            .into_iter()
+            .find(|c| c.name.contains("IMX455"))
+            .expect("IMX455 preset");
+        let cfg = Config {
+            label: "fixture".into(),
+            telescope,
+            camera,
+            payload: Payload { mount, accessories_lb: 10.0, back_focus_required_mm: None },
+            timestamp_accuracy_ms: 0.1,
+            target_mag_override: None,
+            exposure_override_s: None,
+        };
+        let site = Site { seeing_arcsec: 2.5, wavelength_um: 0.55, sky_mag_arcsec2: None };
+        (cfg, site)
+    }
+
+    fn l350(max_accel_deg_s2: Option<f64>) -> Mount {
+        Mount {
+            name: "L-350".into(),
+            mount_type: MountType::AltAz,
+            capacity_lb: Some(100.0),
+            max_slew_deg_s: Some(50.0),
+            max_accel_deg_s2,
+            settle_time_s: None,
+            pointing_rms_arcsec: Some(30.0),
+            non_sidereal_tracking: Capability::Yes,
+            source: "test".into(),
+        }
+    }
+
+    /// The named check for one regime of one configuration.
+    fn check_for(key: &str, title: &str, cfg: &Config, site: &Site) -> RegimeCheck {
+        let ev = crate::checks::evaluate(cfg, site, None);
+        ev.regimes
+            .iter()
+            .find(|r| r.regime.key == key)
+            .unwrap_or_else(|| panic!("no regime {key}"))
+            .checks
+            .iter()
+            .find(|c| c.title == title)
+            .unwrap_or_else(|| panic!("no check {title} in regime {key}"))
+            .clone()
+    }
+
+    #[test]
+    fn acceleration_passes_with_a_known_rating() {
+        // LEO needs 0.0086 deg/s^2; 10 deg/s^2 is over a thousand times that.
+        let (cfg, site) = fixture(Some(l350(Some(10.0))));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn acceleration_fails_a_mount_that_cannot_keep_up() {
+        let (cfg, site) = fixture(Some(l350(Some(0.004))));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+    }
+
+    #[test]
+    fn acceleration_warns_when_the_rating_is_unknown_and_leo_needs_it() {
+        // 0.008627 deg/s^2 is above ACCEL_MATTERS_DEG_S2, so an unknown
+        // rating is a question for the vendor rather than a non-issue.
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.verdict.contains("unknown"));
+    }
+
+    #[test]
+    fn acceleration_is_info_when_the_rating_is_unknown_and_irrelevant() {
+        // MEO needs 1.4e-6 deg/s^2. Nobody needs to ask the vendor about that.
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("MEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
+    }
+
+    #[test]
+    fn acceleration_passes_in_stare_mode() {
+        let (cfg, site) = fixture(Some(l350(None)));
+        let c = check_for("GEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+    }
+
+    #[test]
+    fn acceleration_treats_a_nonsense_rating_as_unknown() {
+        // Review Focus 2: a zero, negative or NaN rating in presets.yaml must
+        // not become an unfollowable mount.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let (cfg, site) = fixture(Some(l350(Some(bad))));
+            let c = check_for("LEO", "Acceleration", &cfg, &site);
+            assert_eq!(c.status, Status::Warn, "rating {bad} was trusted");
+            assert!(c.verdict.contains("unknown"), "rating {bad} was trusted");
+        }
+    }
+
+    #[test]
+    fn acceleration_is_info_with_no_mount() {
+        let (cfg, site) = fixture(None);
+        let c = check_for("LEO", "Acceleration", &cfg, &site);
+        assert_eq!(c.status, Status::Info);
     }
 
     #[test]
