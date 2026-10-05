@@ -3,7 +3,7 @@
 import { Alert, Box, FormControl, InputLabel, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material';
 import { CUSTOM_TLE_ID, TARGETS } from '../config/scenarios';
 import { duration, utc } from '../format';
-import type { PassList, SiteSpec } from '../sim/types';
+import type { Conditions, PassList, SiteSpec } from '../sim/types';
 import { NumberField } from './NumberField';
 
 export interface ScenarioSettings {
@@ -21,6 +21,8 @@ interface Props {
   onCustomStart: (iso: string) => void;
   site: SiteSpec;
   onSite: (site: SiteSpec) => void;
+  conditions: Conditions;
+  onConditions: (conditions: Conditions) => void;
   settings: ScenarioSettings;
   onSettings: (s: ScenarioSettings) => void;
   passes: PassList | null;
@@ -77,6 +79,24 @@ export function ScenarioPanel(p: Props) {
           <NumberField label="Latitude" value={p.site.lat_deg} min={-90} max={90} onCommit={(v) => p.onSite({ ...p.site, lat_deg: v ?? 0 })} />
           <NumberField label="Longitude" value={p.site.lon_deg} min={-180} max={360} onCommit={(v) => p.onSite({ ...p.site, lon_deg: v ?? 0 })} />
           <NumberField label="Altitude, m" value={p.site.alt_m} min={-500} max={9000} onCommit={(v) => p.onSite({ ...p.site, alt_m: v ?? 0 })} />
+        </Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+          <NumberField
+            label='Seeing, " FWHM'
+            value={p.conditions.seeing_arcsec}
+            min={0.1}
+            max={20}
+            onCommit={(v) => p.onConditions({ ...p.conditions, seeing_arcsec: v ?? 2.5 })}
+            helperText="sets the star image"
+          />
+          <NumberField
+            label="Wavelength, um"
+            value={p.conditions.wavelength_um}
+            min={0.2}
+            max={5}
+            onCommit={(v) => p.onConditions({ ...p.conditions, wavelength_um: v ?? 0.55 })}
+            helperText="for diffraction"
+          />
         </Box>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5 }}>
           <NumberField

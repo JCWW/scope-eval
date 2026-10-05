@@ -16,6 +16,12 @@ Every `STEP_S` (0.02 s):
 
 Samples are recorded every 0.5 s. Summary statistics (RMS and largest error, time in field, field exits, time rate- or acceleration-limited, peak axis utilization) are accumulated every step.
 
+## Star image
+
+`Presets::star_image` sizes a star on a configuration's sensor. It runs scope-eval's point spread function budget (`scope_eval::psf::PsfBudget`) on the full telescope and camera presets: seeing, diffraction, the optics' spot sizes, detector diffusion from a measured MTF and the pixel aperture, each a Gaussian added in quadrature ([docs/17](../../docs/17-point-spread-function.md)). It then adds one term only the simulation has: the smear from **tracking jitter** over an exposure, a Gaussian whose per-axis RMS is the jitter RMS / sqrt 2, so FWHM = 1.665 x jitter RMS. That assumes the exposure is much longer than the jitter's 0.5 s correlation time; shorter exposures smear less. Seeing and wavelength come in as `Conditions` (default 2.5" at 0.55 um), separate from the scenario, so changing them never restarts a run.
+
+The star image does not change the verdict: whether the target stays in the field doesn't depend on its size.
+
 ## Verdict
 
 | Time in field | Verdict |
@@ -28,7 +34,7 @@ As in scope-eval, a run never grades PASS on numbers nobody entered: if the axis
 
 ## Inputs and assumed values
 
-Hardware comes from scope-eval's `presets.yaml`, so the dashboard and the command-line tool never disagree about a spec. Configurations name a telescope, camera and mount preset, plus optional mount overrides. Where neither the preset nor the override gives a figure, these are assumed and flagged:
+Hardware comes from scope-eval's `presets.yaml`, so the dashboard and the command-line tool never disagree about a spec. The crate depends on scope-eval's library for the star image, so the point spread function model also exists once. Configurations name a telescope, camera and mount preset, plus optional mount overrides. Where neither the preset nor the override gives a figure, these are assumed and flagged:
 
 | Figure | Assumed | Why |
 |---|---|---|
@@ -52,4 +58,4 @@ Hardware comes from scope-eval's `presets.yaml`, so the dashboard and the comman
 cargo test -p scope-sim
 ```
 
-They check the geometry (round trips, orthonormal camera bases), the servo (zero lag on a constant rate, no overshoot on a step, limits never exceeded, azimuth taking the short way round) and whole runs: a perfect mount has no error, a pointing offset appears as a constant offset, a 2 km ephemeris error appears as about 2 km / range, a slow mount loses an 83 deg pass at the zenith keyhole while a fast one doesn't, and the same seed gives the same run.
+They also check the star image against scope-eval's running example (3.03" recorded, 3.46" with the default 1" jitter). They check the geometry (round trips, orthonormal camera bases), the servo (zero lag on a constant rate, no overshoot on a step, limits never exceeded, azimuth taking the short way round) and whole runs: a perfect mount has no error, a pointing offset appears as a constant offset, a 2 km ephemeris error appears as about 2 km / range, a slow mount loses an 83 deg pass at the zenith keyhole while a fast one doesn't, and the same seed gives the same run.

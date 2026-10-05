@@ -3,7 +3,7 @@
 // A TLE is only good near its epoch, so each target carries the start of
 // the pass search that goes with it.
 
-import type { ScenarioSpec, SiteSpec, TargetSpec } from '../sim/types';
+import type { Conditions, ScenarioSpec, SiteSpec, TargetSpec } from '../sim/types';
 
 export interface TargetPreset {
   id: string;
@@ -105,3 +105,6 @@ export function scenarioFor(
 ): ScenarioSpec {
   return { site, target: preset.target, start: preset.start, hours: preset.hours, ...settings };
 }
+
+/** scope-eval's defaults: 2.5" seeing at 0.55 um. */
+export const DEFAULT_CONDITIONS: Conditions = { seeing_arcsec: 2.5, wavelength_um: 0.55 };

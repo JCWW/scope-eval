@@ -10,10 +10,12 @@ import init, {
   presets as presetsJson,
   resolveConfig as resolveConfigJson,
   runToEnd as runToEndJson,
+  starImage as starImageJson,
   type InitInput,
 } from '../wasm/scope_sim_wasm.js';
 import type {
   AdvanceResult,
+  Conditions,
   ConfigSpec,
   Hardware,
   PassList,
@@ -21,6 +23,7 @@ import type {
   Sample,
   ScenarioSpec,
   SimInfo,
+  StarImage,
   Summary,
   TrackPoint,
 } from './types';
@@ -44,6 +47,9 @@ function call<T>(f: () => string): T {
 export const getPresets = (): Presets => call(() => presetsJson());
 
 export const resolveConfig = (config: ConfigSpec): Hardware => call(() => resolveConfigJson(JSON.stringify(config)));
+
+export const starImage = (config: ConfigSpec, conditions: Conditions): StarImage =>
+  call(() => starImageJson(JSON.stringify(config), JSON.stringify(conditions)));
 
 export const findPasses = (scenario: ScenarioSpec): PassList => call(() => findPassesJson(JSON.stringify(scenario)));
 

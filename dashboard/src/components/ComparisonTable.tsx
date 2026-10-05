@@ -16,10 +16,10 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { angle, clock, percent } from '../format';
-import { runToEnd } from '../sim/engine';
-import type { ConfigSpec, ScenarioSpec, Summary } from '../sim/types';
+import { runToEnd, starImage } from '../sim/engine';
+import type { Conditions, ConfigSpec, ScenarioSpec, Summary } from '../sim/types';
 import { VerdictChip } from './StatTiles';
 
 type Row = { name: string; summary: Summary | null; error: string | null };
@@ -30,15 +30,28 @@ interface Props {
   onSelect: (index: number) => void;
   scenario: ScenarioSpec | null;
   passIndex: number | null;
+  conditions: Conditions;
 }
 
-export function ComparisonTable({ configurations, selected, onSelect, scenario, passIndex }: Props) {
+export function ComparisonTable({ configurations, selected, onSelect, scenario, passIndex, conditions }: Props) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const run = useRef(0);
 
   // Results belong to one scenario, pass and set of configurations.
   const inputs = JSON.stringify([configurations, scenario, passIndex]);
+  // Star sizes need no simulation, so they follow the seeing without a re-run.
+  const stars = useMemo(
+    () =>
+      configurations.map((c) => {
+        try {
+          return starImage(c, conditions);
+        } catch {
+          return null;
+        }
+      }),
+    [configurations, conditions],
+  );
   useEffect(() => {
     run.current++;
     setRows(null);
@@ -100,6 +113,8 @@ export function ComparisonTable({ configurations, selected, onSelect, scenario, 
                 <TableCell align="right">Largest error</TableCell>
                 <TableCell align="right">Peak rate used</TableCell>
                 <TableCell align="right">Rate-limited</TableCell>
+                <TableCell align="right">Star FWHM</TableCell>
+                <TableCell align="right">px across</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -131,6 +146,8 @@ export function ComparisonTable({ configurations, selected, onSelect, scenario, 
                       </Alert>
                     </TableCell>
                   )}
+                  <TableCell align="right">{stars[i] ? angle(stars[i].tracked_fwhm.center) : '-'}</TableCell>
+                  <TableCell align="right">{stars[i] ? stars[i].pixels_across.toFixed(1) : '-'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -139,7 +156,8 @@ export function ComparisonTable({ configurations, selected, onSelect, scenario, 
       )}
       {rows && rows.length > 0 && progress === null && (
         <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1 }}>
-          Select a row to switch to that configuration.
+          Select a row to switch to that configuration. Star FWHM is the star in a tracked exposure at the sensor centre
+          (seeing, diffraction, optics, detector and tracking jitter); px across is the sampled image in native pixels.
         </Typography>
       )}
     </Paper>

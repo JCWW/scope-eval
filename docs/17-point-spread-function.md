@@ -105,7 +105,7 @@ At GEO the running example gives 3.03 / 2.355 / 526 = **2.4 milliarcseconds**. T
 * **The central obstruction's rings.** An obstruction narrows the Airy core slightly but moves light into the rings. The diffraction term uses the unobstructed core. That makes little difference while seeing dominates, but the DeltaRho tubes' 56 to 63% obstructions move a noticeable share of light out of the core.
 * **One wavelength.** Diffraction and diffusion both depend on wavelength. The tool uses the site's single reference wavelength.
 * **Spot shape.** A real off-axis spot is rarely round. The tool uses the RMS figure as if it were.
-* **Tracking jitter and wind shake.** Not included. If you know them, add them to the seeing in quadrature before entering it.
+* **Tracking jitter and wind shake.** Not included here. The [dashboard](../dashboard/README.md) adds the simulated mount's tracking jitter as a further term (FWHM = 1.665 x jitter RMS) in its Star image panel. In the command-line tool, add any jitter you know of to the seeing in quadrature before entering it.
 
 A fuller model would build the star on a fine 2-D grid from a Moffat seeing profile, a computed diffraction pattern for the actual obstructed aperture and the vendor's encircled-energy data, then integrate it over pixels at random positions. Measured PSFs from real frames are the best check on either.
 

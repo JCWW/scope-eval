@@ -6,8 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use scope_eval::presets::PresetSet;
+
 use crate::error::SimError;
 use crate::geometry::MountKind;
+use crate::star::{star_image, Conditions, StarImage};
 use crate::hardware::{
     Hardware, MountModel, Optics, Param, DEFAULT_JITTER_RMS_ARCSEC, DEFAULT_MAX_ACCEL_DEG_S2,
     DEFAULT_MAX_RATE_DEG_S, DEFAULT_POINTING_RMS_ARCSEC, SERVO_GAIN_PER_S,
@@ -58,6 +61,10 @@ pub struct Presets {
     pub telescopes: Vec<TelescopePreset>,
     pub cameras: Vec<CameraPreset>,
     pub mounts: Vec<MountPreset>,
+    /// The same file in scope-eval's full model types, for the star image
+    /// (spot sizes, obstruction, MTF and the rest). Not sent to the dashboard.
+    #[serde(skip)]
+    full: Option<PresetSet>,
 }
 
 /// Values the user enters on top of a mount preset. Each one, when present,
@@ -83,7 +90,20 @@ pub struct ConfigSpec {
 
 impl Presets {
     pub fn from_yaml(text: &str) -> Result<Presets, SimError> {
-        serde_yaml::from_str(text).map_err(|e| SimError::new(format!("presets file: {e}")))
+        let mut presets: Presets =
+            serde_yaml::from_str(text).map_err(|e| SimError::new(format!("presets file: {e}")))?;
+        presets.full = Some(PresetSet::from_yaml(text).map_err(|e| SimError::new(format!("presets file: {e}")))?);
+        Ok(presets)
+    }
+
+    /// What a star looks like on this configuration's sensor under the given
+    /// conditions: scope-eval's point spread function plus tracking jitter.
+    pub fn star_image(&self, spec: &ConfigSpec, conditions: &Conditions) -> Result<StarImage, SimError> {
+        let hardware = self.resolve(spec)?;
+        let full = self.full.as_ref().ok_or_else(|| SimError::new("presets were not read with from_yaml"))?;
+        let t = find(&full.telescopes, |p| &p.name, &spec.telescope, "telescope")?;
+        let c = find(&full.cameras, |p| &p.name, &spec.camera, "camera")?;
+        star_image(t, c, &hardware, conditions)
     }
 
     pub fn resolve(&self, spec: &ConfigSpec) -> Result<Hardware, SimError> {
@@ -184,5 +204,44 @@ mod tests {
         assert!(p.resolve(&spec("PlaneWave L-350 (direct drive)", bad)).is_err());
         let nan = MountOverrides { pointing_rms_arcsec: Some(f64::NAN), ..Default::default() };
         assert!(p.resolve(&spec("PlaneWave L-350 (direct drive)", nan)).is_err());
+    }
+
+    #[test]
+    fn star_image_matches_scope_eval() {
+        // The running example: scope-eval's recorded star is 3.030" at 2.5"
+        // seeing (docs/17-point-spread-function.md).
+        let p = Presets::from_yaml(YAML).unwrap();
+        let s = p.star_image(&spec("PlaneWave L-350 (direct drive)", MountOverrides::default()), &Conditions::default()).unwrap();
+        assert!((s.recorded_fwhm.center - 3.030).abs() < 0.001, "recorded {}", s.recorded_fwhm.center);
+        assert!((s.sampled_fwhm.center - 2.988).abs() < 0.001);
+        assert!((s.pixels_across - 4.05).abs() < 0.01);
+        assert!(s.sampled_fwhm_if_diameter.is_some());
+        // Default jitter 1" RMS smears by 1.665": sqrt(3.030^2 + 1.665^2) = 3.457".
+        assert!(s.jitter_assumed);
+        assert!((s.tracked_fwhm.center - 3.457).abs() < 0.002, "tracked {}", s.tracked_fwhm.center);
+        assert!(s.assumed.iter().any(|a| a == "tracking jitter"));
+    }
+
+    #[test]
+    fn star_image_follows_seeing_and_jitter_overrides() {
+        let p = Presets::from_yaml(YAML).unwrap();
+        let still = MountOverrides { jitter_rms_arcsec: Some(0.0), ..MountOverrides::default() };
+        let spec = spec("PlaneWave L-350 (direct drive)", still);
+        let good = p.star_image(&spec, &Conditions { seeing_arcsec: 1.0, wavelength_um: 0.55 }).unwrap();
+        let bad = p.star_image(&spec, &Conditions { seeing_arcsec: 4.0, wavelength_um: 0.55 }).unwrap();
+        assert!(good.recorded_fwhm.center < bad.recorded_fwhm.center);
+        // No jitter: the tracked star is the recorded star, and nothing is assumed about jitter.
+        assert_eq!(good.tracked_fwhm, good.recorded_fwhm);
+        assert!(!good.jitter_assumed);
+        // At 1" seeing the optics, not the air, are the largest term.
+        assert_eq!(good.largest_term, "optics");
+    }
+
+    #[test]
+    fn star_image_rejects_bad_conditions() {
+        let p = Presets::from_yaml(YAML).unwrap();
+        let spec = spec("PlaneWave L-350 (direct drive)", MountOverrides::default());
+        assert!(p.star_image(&spec, &Conditions { seeing_arcsec: 0.0, wavelength_um: 0.55 }).is_err());
+        assert!(p.star_image(&spec, &Conditions { seeing_arcsec: 2.5, wavelength_um: f64::NAN }).is_err());
     }
 }

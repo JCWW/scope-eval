@@ -55,6 +55,41 @@ export interface ConfigSpec {
   mount_overrides: MountOverrides;
 }
 
+/** Seeing and wavelength, which set a star's size. */
+export interface Conditions {
+  seeing_arcsec: number;
+  wavelength_um: number;
+}
+
+export interface CenterCorner {
+  center: number;
+  corner: number;
+}
+
+/** A star on the sensor: scope-eval's point spread function plus tracking jitter. Widths are FWHM, arcsec. */
+export interface StarImage {
+  seeing_arcsec: number;
+  diffraction_arcsec: number;
+  optics_arcsec: CenterCorner | null;
+  spot_reading: string | null;
+  optics_extrapolated: boolean;
+  diffusion_arcsec: number | null;
+  pixel_arcsec: number;
+  jitter_arcsec: number;
+  jitter_assumed: boolean;
+  sampled_fwhm: CenterCorner;
+  sampled_fwhm_if_diameter: CenterCorner | null;
+  recorded_fwhm: CenterCorner;
+  tracked_fwhm: CenterCorner;
+  plate_scale_arcsec: number;
+  pixels_across: number;
+  /** Light in the brightest pixel: `center` with the star centred on a pixel, `corner` on a pixel corner. */
+  peak_pixel_fraction: CenterCorner;
+  largest_term: string;
+  corner_radius_mm: number;
+  assumed: string[];
+}
+
 export type TargetSpec =
   | { kind: 'tle'; text: string }
   | {

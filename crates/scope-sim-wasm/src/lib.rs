@@ -8,7 +8,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use scope_sim::{ConfigSpec, Presets, ScenarioSpec, SimError, Simulation};
+use scope_sim::{Conditions, ConfigSpec, Presets, ScenarioSpec, SimError, Simulation};
 
 /// scope-eval's hardware presets, compiled in so the dashboard and the
 /// command-line tool can never disagree about a spec.
@@ -42,6 +42,16 @@ pub fn presets() -> Result<String, JsError> {
 pub fn resolve_config(config_json: &str) -> Result<String, JsError> {
     let spec: ConfigSpec = from_json(config_json, "configuration").map_err(js)?;
     presets_parsed().and_then(|p| p.resolve(&spec)).and_then(|hw| to_json(&hw)).map_err(js)
+}
+
+/// What a star looks like on a configuration's sensor under the given
+/// seeing and wavelength: scope-eval's point spread function budget plus
+/// the smear from the mount's tracking jitter.
+#[wasm_bindgen(js_name = starImage)]
+pub fn star_image(config_json: &str, conditions_json: &str) -> Result<String, JsError> {
+    let spec: ConfigSpec = from_json(config_json, "configuration").map_err(js)?;
+    let conditions: Conditions = from_json(conditions_json, "conditions").map_err(js)?;
+    presets_parsed().and_then(|p| p.star_image(&spec, &conditions)).and_then(|s| to_json(&s)).map_err(js)
 }
 
 /// Passes of the scenario's target over its site in its search window.

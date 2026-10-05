@@ -5,7 +5,8 @@ A React dashboard for watching the [`scope-sim`](../crates/scope-sim/README.md) 
 * **Start, stop and reset** the simulation, at 1x to 100x real time.
 * **Watch pointing accuracy** four ways: the camera field (where the satellite is on the sensor, with a 30-second trail and the pointing-RMS circle), a sky plot of the pass, the pointing error over time against the edge of the field, and the axis rates against the mount's limit.
 * **Switch configurations** at any moment. Switching keeps the playback position, so you can watch two configurations at the same instant of the same pass. Configurations can be edited, duplicated and deleted; edits are kept in the browser.
-* **Compare** every configuration through the selected pass in one table.
+* **See the star image**: scope-eval's point spread function for the selected configuration (seeing, diffraction, optics, detector and pixel aperture, plus the mount's tracking jitter), drawn on the pixel grid. Change the seeing and wavelength in the target panel.
+* **Compare** every configuration through the selected pass in one table, including each one's star size.
 
 It is built with React, TypeScript, Vite and [Material UI](https://mui.com/) (MUI X Charts for the time series).
 
@@ -16,8 +17,10 @@ The simulation itself is Rust, compiled to WebAssembly, so the dashboard uses th
 ```
 presets.yaml ──┐
 orbit-prop ────┼─> scope-sim (Rust) ─> scope-sim-wasm ─> src/wasm/ (generated) ─> React
-               │                          JSON strings     src/sim/engine.ts
+scope-eval ────┘   (star image)           JSON strings     src/sim/engine.ts
 ```
+
+The star image comes from scope-eval's own point spread function code (`src/psf.rs`), compiled into the engine, so the dashboard and the command-line tool size a star identically. See [docs/17-point-spread-function.md](../docs/17-point-spread-function.md).
 
 Each animation frame, `useSimulation` advances the engine by the frame time multiplied by the playback speed and publishes the result to React about 15 times a second.
 
@@ -60,6 +63,7 @@ Things to try:
 * Run the ISS's 83-degree pass with **DeltaRho 350 on a slow alt-az mount**. The azimuth axis hits its 2 deg/s limit near culmination and the satellite leaves the field for over a minute. Switch to **DeltaRho 350 on L-350** mid-pass to see the same moment with a 50 deg/s axis.
 * Set the **ephemeris error** to 2 km and compare the **CDK17** (0.33 deg field) with the **RASA 11 + IMX174**: the same error is a much bigger fraction of a narrow field, and biggest overhead where the range is shortest.
 * Raise **pointing RMS** until the satellite starts landing near the edge of a small sensor.
+* Lower the **seeing** to 1" and watch the **Star image** panel: on the DeltaRho 350 the optics become the largest term. Then set **Jitter RMS** to 0 and see the tracked-exposure star shrink back to the recorded one.
 
 ## Project layout
 
@@ -70,13 +74,13 @@ src/
   format.ts              angle, duration and time formatting
   config/
     configurations.ts    default configurations (preset names + mount overrides)
-    scenarios.ts         target orbits and the default site
+    scenarios.ts         target orbits, the default site and default seeing
   sim/
     types.ts             TypeScript mirrors of the engine's JSON
     engine.ts            loads the WebAssembly engine; typed wrappers
     useSimulation.ts     the playback loop as a React hook
     playback.ts          speeds, frame timing, chart decimation
-  components/            transport bar, stat tiles, sky plot, camera field, charts, panels, comparison
+  components/            transport bar, stat tiles, sky plot, camera field, star image, charts, panels, comparison
 scripts/build-wasm.mjs   builds crates/scope-sim-wasm and runs wasm-bindgen
 ```
 

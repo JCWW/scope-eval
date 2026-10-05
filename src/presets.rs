@@ -22,26 +22,49 @@ struct PresetsFile {
     mounts: Vec<MountDto>,
 }
 
-fn presets_file() -> &'static PresetsFile {
-    static PRESETS: OnceLock<PresetsFile> = OnceLock::new();
+/// Every preset in a presets file, in the model types.
+///
+/// `scope-sim` parses the same file from text compiled into the dashboard,
+/// so this is public: it lets the simulation reuse the point spread
+/// function model instead of a copy of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresetSet {
+    pub telescopes: Vec<Telescope>,
+    pub cameras: Vec<Camera>,
+    pub mounts: Vec<Mount>,
+}
+
+impl PresetSet {
+    pub fn from_yaml(text: &str) -> Result<PresetSet, String> {
+        let file: PresetsFile = serde_yaml::from_str(text).map_err(|e| e.to_string())?;
+        Ok(PresetSet {
+            telescopes: file.telescopes.into_iter().map(Into::into).collect(),
+            cameras: file.cameras.into_iter().map(Into::into).collect(),
+            mounts: file.mounts.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
+fn presets_file() -> &'static PresetSet {
+    static PRESETS: OnceLock<PresetSet> = OnceLock::new();
     PRESETS.get_or_init(|| {
         let text = std::fs::read_to_string(PRESETS_PATH)
             .unwrap_or_else(|e| panic!("failed to read presets file at {PRESETS_PATH}: {e}"));
-        serde_yaml::from_str(&text)
+        PresetSet::from_yaml(&text)
             .unwrap_or_else(|e| panic!("failed to parse presets file at {PRESETS_PATH}: {e}"))
     })
 }
 
 pub fn telescopes() -> Vec<Telescope> {
-    presets_file().telescopes.iter().cloned().map(Into::into).collect()
+    presets_file().telescopes.clone()
 }
 
 pub fn cameras() -> Vec<Camera> {
-    presets_file().cameras.iter().cloned().map(Into::into).collect()
+    presets_file().cameras.clone()
 }
 
 pub fn mounts() -> Vec<Mount> {
-    presets_file().mounts.iter().cloned().map(Into::into).collect()
+    presets_file().mounts.clone()
 }
 
 #[cfg(test)]
