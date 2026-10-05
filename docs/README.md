@@ -37,6 +37,7 @@ Read these in order the first time. Later, jump straight to the page you need.
 | [Assumptions, limitations and red flags](14-assumptions-and-red-flags.md) | What the models leave out, and spec-sheet traps |
 | [Presets](15-presets.md) | Built-in hardware and where its numbers came from |
 | [Code structure](16-code-structure.md) | Where each calculation lives and how to extend the tool |
+| [Point spread function budget](17-point-spread-function.md) | Every blur that sizes a star, which checks use it, and what the model leaves out |
 
 The orbit propagation library has its own documentation in [`crates/orbit-prop/README.md`](../crates/orbit-prop/README.md).
 

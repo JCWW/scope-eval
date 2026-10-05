@@ -129,6 +129,7 @@ name = "scope-sim"
 version = "0.1.0"
 dependencies = [
  "orbit-prop",
+ "scope-eval",
  "serde",
  "serde_yaml",
 ]

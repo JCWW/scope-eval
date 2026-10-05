@@ -152,7 +152,7 @@ These checks describe the optical system in general. They don't depend on the ta
 | # | Check | Question | Graded | Lesson |
 |---|---|---|---|---|
 | 1 | Sensor fit | Does the sensor's diagonal fit inside the image circle? | PASS / WARN / FAIL | [3](docs/learning/03-optics-and-focus.md) |
-| 2 | Sampling | Are there about 2 pixels across a star at your seeing? Which bin gets closest? | PASS / WARN / FAIL | [2](docs/learning/02-seeing-and-sampling.md) |
+| 2 | Sampling | Are there about 2 pixels across a star (seeing plus the telescope's and detector's blur)? Which bin gets closest? | PASS / WARN / FAIL | [2](docs/learning/02-seeing-and-sampling.md) |
 | 3 | Ideal pixel | What pixel size does this focal length want, and does the camera match it natively or after binning? | PASS / WARN | [2](docs/learning/02-seeing-and-sampling.md) |
 | 4 | Optics vs seeing | Does the optical blur enlarge stars noticeably beyond the seeing, at the center and at the sensor's corner? | PASS / WARN / FAIL (INFO without spot data) | [3](docs/learning/03-optics-and-focus.md) |
 | 5 | Area and depth | Effective collecting area after the obstruction, and depth in magnitudes vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
@@ -250,39 +250,40 @@ The geometry comes from the `orbit-prop` library in `crates/orbit-prop`, whose R
 Choose **Compare all evaluated configurations**, or run `--demo`. Example from the demo at 2.5" seeing, with GPS timestamps (0.1 ms) and 30" mount pointing assumed:
 
 ```
-Configuration                  "/px   px/*  bin FOVdeg2 Area m2   dMag Search CFZ+/-  Load%
-DeltaRho 350 + IMX455          0.74    3.4  2x2    2.58  0.0660  +0.00  1.00x   12.1     58
-RASA 11 + IMX455               1.25    2.0  1x1    7.39  0.0509  -0.28  2.21x    6.6     72
-CDK14 + IMX455                 0.30    8.3  4x4    0.43  0.0761  +0.15  0.19x   69.6     60
-CDK17 + IMX455                 0.26    9.5  4x4    0.33  0.1120  +0.57  0.22x   62.1     62
-DeltaRho 500 + IMX461          0.50    5.0  3x3    2.01  0.1321  +0.75  1.56x   12.3     90
-RASA 11 + IMX174 (global)      1.95    1.3  1x1    0.69  0.0509  -0.28  0.21x    6.6     48
+Configuration                  "/px  FWHM"   px/*  bin FOVdeg2 Area m2   dMag Search CFZ+/-  Load%
+DeltaRho 350 + IMX455          0.74   3.03    4.0  2x2    2.58  0.0660  +0.00  1.00x   12.1     58
+RASA 11 + IMX455               1.25   2.67    2.0  1x1    7.39  0.0509  -0.28  2.21x    6.6     72
+CDK14 + IMX455                 0.30   2.56    8.4  4x4    0.43  0.0761  +0.15  0.19x   69.6     60
+CDK17 + IMX455                 0.26   2.63   10.0  4x4    0.33  0.1120  +0.57  0.22x   62.1     62
+DeltaRho 500 + IMX461          0.50   2.68    5.3  3x3    2.01  0.1321  +0.75  1.56x   12.3     90
+RASA 11 + IMX174 (global)      1.95   2.86    1.3  1x1    0.69  0.0509  -0.28  0.21x    6.6     48
 
  Status by check (P=pass W=warn F=fail i=info):
                               1 2 3 4 5 6 7 8
-DeltaRho 350 + IMX455         P P P W i i W P
+DeltaRho 350 + IMX455         P W P W i i W P
 RASA 11 + IMX455              P P P i i i W W
 CDK14 + IMX455                P F W P i i P P
 CDK17 + IMX455                P F W P i i P P
 DeltaRho 500 + IMX461         P W W P i i W W
 RASA 11 + IMX174 (global)     P W W i i i W P
 
- Orbital regimes, telescope/camera/mount (P=pass W=warn F=fail i=info):
-                              LEO     MEO     GEO     HEO     CIS
-DeltaRho 350 + IMX455         P/F/W   P/W/W   P/W/P   P/W/W   P/P/P
-RASA 11 + IMX455              P/W/W   P/W/W   P/W/P   P/W/W   P/P/i
-CDK14 + IMX455                W/F/W   P/W/W   P/W/P   P/W/W   P/P/P
-CDK17 + IMX455                F/F/W   P/W/W   P/W/P   P/W/W   P/P/P
-DeltaRho 500 + IMX461         P/W/W   P/W/W   P/W/P   P/W/W   P/W/P
-RASA 11 + IMX174 (global)     W/P/W   P/P/W   P/P/P   P/P/W   P/P/P
+ Orbital regimes, telescope/camera/mount/system (P=pass W=warn F=fail i=info):
+                              LEO       MEO       GEO       HEO       CIS
+DeltaRho 350 + IMX455         P/F/W/W   P/W/W/W   P/W/P/W   P/W/W/W   P/P/P/W
+RASA 11 + IMX455              P/W/W/W   P/W/W/W   P/W/P/W   P/W/W/W   P/P/i/W
+CDK14 + IMX455                W/F/W/W   P/W/W/W   P/W/P/W   P/W/W/W   P/P/P/W
+CDK17 + IMX455                F/F/W/W   P/W/W/W   P/W/P/W   P/W/W/W   P/P/P/W
+DeltaRho 500 + IMX461         P/W/W/W   P/W/W/W   P/W/P/W   P/W/W/W   P/W/P/W
+RASA 11 + IMX174 (global)     W/P/W/W   P/P/W/W   P/P/P/W   P/P/W/W   P/P/P/W
 ```
 
-In the regime matrix each cell is telescope/camera/mount. The last row shows the trade a small global-shutter camera makes: it fixes the camera for LEO, but its small field drops the telescope to WARN for LEO acquisition.
+In the regime matrix each cell is telescope/camera/mount/system. The last row shows the trade a small global-shutter camera makes: it fixes the camera for LEO, but its small field drops the telescope to WARN for LEO acquisition.
 
 | Column | Meaning |
 |---|---|
 | "/px | Native plate scale |
-| px/* | Pixels across a star at native resolution |
+| FWHM" | Recorded star FWHM at the sensor centre: seeing, diffraction, optics, detector diffusion and pixel aperture ([PSF budget](docs/17-point-spread-function.md)) |
+| px/* | Pixels across the sampled star at native resolution |
 | bin | Recommended square bin |
 | FOVdeg2 | Field area in square degrees |
 | Area m2 | Effective collecting area |
@@ -366,6 +367,7 @@ The default seeing (`DEFAULT_SEEING_ARCSEC`, 2.5") and reference wavelength (`DE
 * **Linear spot interpolation.** Spot size between and beyond quoted field points is estimated linearly.
 * **Diffraction-based focus criterion.** The CFZ formula uses a standard diffraction criterion at 0.55 um. With seeing-limited images, practical tolerance can be somewhat looser, but fast systems remain demanding.
 * **Footprint estimate.** "Pixels in a star's footprint" is approximated as (pixels across)^2. A photometric aperture is typically larger, but the ratio between configurations is what matters.
+* **Gaussian point spread function.** Seeing, diffraction, optics, detector diffusion and the pixel aperture are each treated as a Gaussian and added in quadrature. Real seeing has broader wings and diffraction has rings. An unlabelled RMS spot is read as a radius, the larger blur. See [the PSF budget](docs/17-point-spread-function.md).
 * **Sidereal drift at the equator.** GEO motion figures assume declination near zero.
 * **Regimes are single representative cases.** Each regime is one geometry (for example a 500 km overhead LEO pass). Real targets span wide ranges of altitude, pass geometry and brightness. The overhead pass is deliberately the worst case for rates.
 * **Earth rotation simplified.** LEO and MEO rates ignore Earth's rotation, and the HEO and cislunar ground rates are simple differences from the sidereal rate. Directions of motion are ignored.
@@ -430,7 +432,7 @@ PlaneWave publishes no corrected image circle for the RC20, RC24, RC700 or the I
 
 **Cameras**
 
-No preset carries a quantum efficiency or read-noise figure. Both vary with gain, mode and vendor binning for the same sensor, so entering a single number from a QE curve would be inventing data. The detection check assumes 0.80 and 3 e- and says so.
+No preset carries a quantum efficiency or read-noise figure. Both vary with gain, mode and vendor binning for the same sensor, so entering a single number from a QE curve would be inventing data. The detection check assumes 0.80 and 3 e- and says so. No preset carries a detector MTF either, so the point spread function counts the pixel aperture but no charge diffusion, and the report says so. Enter `mtf_nyquist` from a measured MTF curve if you have one ([page 17](docs/17-point-spread-function.md)).
 
 
 | Preset | Pixel (um) | Pixels | Shutter | Notes |
@@ -476,14 +478,17 @@ src/
     orbit.rs     circular speed, vis-viva speed and apparent orbital-rate calculations
     mount.rs     mount dynamics, payload capacity and back-focus calculations
     detection.rs target brightness, exposure, signal, noise and limiting-magnitude calculations
+    psf.rs       point spread function terms: diffraction, diffusion from MTF, pixel aperture,
+                 brightest-pixel fraction and centroid precision
   constants.rs every named constant: physical constants, default assumptions, judgment thresholds
   checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
   photometry.rs  photometric inputs with defaults substituted, and which defaults were assumed
+  psf.rs       the system point spread function budget behind checks 2 and 3 and detection
   passes.rs    orbit source to propagator, stale-TLE note, per-pass "Mount can follow?" judgment
   presets.rs   loads presets.yaml
   report/      the text reports, as Display types; nothing here prints
-    evaluation.rs      one configuration: the eight checks, GEO timing, regime summary
+    evaluation.rs      one configuration: the eight checks, PSF budget, GEO timing, regime summary
     comparison.rs      the side-by-side comparison tables
     regime_details.rs  every regime check with its numbers
     passes.rs          the pass table
@@ -520,7 +525,7 @@ docs/learning/      lessons on the concepts, plus check_examples.py, an independ
 
 **Adding a regime check.** Write a function returning a `RegimeCheck` tagged with its `Component`, and add it to the list in `evaluate_regimes`. Component and overall statuses are recomputed automatically.
 
-**Tests.** `cargo test` runs the worked examples from the [lessons](docs/learning/README.md): plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement. It also runs the `orbit-prop` tests, which check the library against published references: Vallado's GMST, site-vector and SGP4 verification cases, and Meeus's Sun and Moon examples.
+**Tests.** `cargo test` runs the worked examples from the [lessons](docs/learning/README.md): plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, the point spread function budget (diffraction, diffusion from MTF, pixel aperture, brightest-pixel fraction), rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement. It also runs the `orbit-prop` tests, which check the library against published references: Vallado's GMST, site-vector and SGP4 verification cases, and Meeus's Sun and Moon examples.
 
 ---
 

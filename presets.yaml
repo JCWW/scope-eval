@@ -10,6 +10,7 @@
 # non_sidereal_tracking: `true`, `false`, or omit/null if not known.
 # throughput: optical throughput 0..1, or omit/null if not measured.
 # qe: peak quantum efficiency 0..1, or omit/null if not entered.
+# mtf_nyquist: measured detector MTF at Nyquist 0..1 (includes the pixel aperture), or omit/null.
 # max_accel_deg_s2, settle_time_s: mount dynamics, or omit/null if not published.
 
 telescopes:

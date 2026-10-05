@@ -22,13 +22,14 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { FieldView } from './components/FieldView';
 import { ScenarioPanel, type ScenarioSettings } from './components/ScenarioPanel';
 import { SkyPlot } from './components/SkyPlot';
+import { StarImagePanel } from './components/StarImagePanel';
 import { StatTiles } from './components/StatTiles';
 import { TransportBar } from './components/TransportBar';
 import { DEFAULT_CONFIGURATIONS } from './config/configurations';
-import { CUSTOM_TLE_ID, DEFAULT_SCENARIO_SETTINGS, DEFAULT_SITE, TARGETS, scenarioFor } from './config/scenarios';
+import { CUSTOM_TLE_ID, DEFAULT_CONDITIONS, DEFAULT_SCENARIO_SETTINGS, DEFAULT_SITE, TARGETS, scenarioFor } from './config/scenarios';
 import { duration } from './format';
-import { findPasses, getPresets, loadEngine, resolveConfig } from './sim/engine';
-import type { ConfigSpec, PassList, Presets, ScenarioSpec, SiteSpec } from './sim/types';
+import { findPasses, getPresets, loadEngine, resolveConfig, starImage } from './sim/engine';
+import type { Conditions, ConfigSpec, PassList, Presets, ScenarioSpec, SiteSpec } from './sim/types';
 import { useSimulation } from './sim/useSimulation';
 
 const STORAGE_KEY = 'scope-sim-dashboard:configurations';
@@ -96,6 +97,18 @@ export function App() {
       return { hardware: null, error: message(e) };
     }
   }, [ready, config]);
+
+  // Seeing and wavelength set the star image. They are kept out of the
+  // scenario, so changing them doesn't search for passes or restart the run.
+  const [conditions, setConditions] = useState<Conditions>(DEFAULT_CONDITIONS);
+  const star = useMemo(() => {
+    if (!ready || !config || resolved.error) return { image: null, error: null };
+    try {
+      return { image: starImage(config, conditions), error: null };
+    } catch (e) {
+      return { image: null, error: message(e) };
+    }
+  }, [ready, config, resolved.error, conditions]);
 
   // Scenario.
   const [targetId, setTargetId] = useState(TARGETS[0]!.id);
@@ -202,6 +215,8 @@ export function App() {
                   onCustomStart={setCustomStart}
                   site={site}
                   onSite={setSite}
+                  conditions={conditions}
+                  onConditions={setConditions}
                   settings={settings}
                   onSettings={setSettings}
                   passes={passes.list}
@@ -209,6 +224,7 @@ export function App() {
                   passIndex={passIndex}
                   onPass={(index) => setPassChoice({ key: scenarioKey, index })}
                 />
+                <StarImagePanel star={star.image} error={star.error} />
               </Stack>
             </Grid>
 
@@ -252,6 +268,7 @@ export function App() {
                   onSelect={setSelected}
                   scenario={passes.list && passes.list.passes.length > 0 ? scenario : null}
                   passIndex={passIndex}
+                  conditions={conditions}
                 />
               </Stack>
             </Grid>

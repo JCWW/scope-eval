@@ -12,7 +12,7 @@ For each configuration the tool runs the same sequence:
                                 sensor width, height, diagonal (mm) = pixels x pixel size
 3. Run the eight checks         each returns: status, detail lines, verdict
      1  Sensor fit              image circle vs sensor diagonal
-     2  Sampling                plate scale vs seeing, recommended bin
+     2  Sampling                plate scale vs star FWHM, recommended bin
      3  Ideal pixel             the pixel size this telescope wants
      4  Optics vs seeing        does the glass or the air limit the image?
      5  Area and depth          effective collecting area, magnitudes vs reference

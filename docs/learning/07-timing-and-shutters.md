@@ -127,16 +127,16 @@ In GEO stare mode, the stars at the bottom of the frame are recorded a quarter s
 **Formulas.**
 
 ```
-crossing time (s)       = seeing FWHM (") / rate vs stars ("/s)
+crossing time (s)       = star FWHM (") / rate vs stars ("/s)
 streak per second (px)  = rate vs stars / binned plate scale
 ```
 
-The crossing time is how long it takes the moving object to move by one seeing disk: the longest exposure before it starts to look like a streak rather than a star.
+The crossing time is how long it takes the moving object to move by one star width: the longest exposure before it starts to look like a streak rather than a star. The star width is mostly the seeing. The tool uses the recorded star from [Lesson 2, section 2.7](02-seeing-and-sampling.md#27-the-star-is-bigger-than-the-seeing), which is 3.03" for the running example. The worked examples below use the 2.5" seeing to keep the arithmetic simple, so the tool's times are about 20% longer.
 
 **Worked examples.**
 
-* **LEO:** 2.5 / 3,140 = 0.8 ms. No useful exposure is that short, which is why LEO observing means rate tracking with streaked stars.
-* **Cislunar:** 2.5 / 0.55 = 4.5 s. A sidereally tracked exposure of a few seconds keeps the target point-like. [Lesson 9](09-brightness-and-detection.md) uses this as its exposure time.
+* **LEO:** 2.5 / 3,140 = 0.8 ms. No useful exposure is that short, which is why LEO observing means rate tracking with streaked stars. With the 3.03" star the tool prints 965 us.
+* **Cislunar:** 2.5 / 0.55 = 4.5 s. A sidereally tracked exposure of a few seconds keeps the target point-like. [Lesson 9](09-brightness-and-detection.md) uses this as its exposure time, with the 3.03" star: 5.5 s.
 
 ---
 

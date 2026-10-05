@@ -17,14 +17,17 @@ src/
     orbit.rs     circular speed, vis-viva speed and apparent orbital-rate calculations
     mount.rs     mount dynamics, payload capacity and back-focus calculations
     detection.rs target brightness, exposure, signal, noise and limiting-magnitude calculations
+    psf.rs       point spread function terms: diffraction, diffusion from MTF, pixel aperture,
+                 brightest-pixel fraction and centroid precision
   constants.rs every named constant: physical constants, default assumptions, judgment thresholds
   checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
   photometry.rs  photometric inputs with defaults substituted, and which defaults were assumed
+  psf.rs       the system point spread function budget behind checks 2 and 3 and detection
   passes.rs    orbit source to propagator, stale-TLE note, per-pass "Mount can follow?" judgment
   presets.rs   loads presets.yaml
   report/      the text reports, as Display types; nothing here prints
-    evaluation.rs      one configuration: the eight checks, GEO timing, regime summary
+    evaluation.rs      one configuration: the eight checks, PSF budget, GEO timing, regime summary
     comparison.rs      the side-by-side comparison tables
     regime_details.rs  every regime check with its numbers
     passes.rs          the pass table
@@ -50,6 +53,7 @@ dashboard/          React + Material UI dashboard that runs and visualizes the s
 | [8](08-orbital-regimes.md) | `calculations/orbit.rs`, `calculations/camera.rs` | `regimes.rs` |
 | [9](09-mount-dynamics.md) | `calculations/mount.rs` (`MountDynamicsCalculator`) | `regimes.rs` |
 | [10](10-target-brightness-and-detection.md) | `calculations/detection.rs`, `photometry.rs` | `regimes.rs` (`system_detection`) |
+| [17](17-point-spread-function.md) | `calculations/psf.rs`, `psf.rs` (`PsfBudget`) | `checks.rs` (checks 2 and 3), `regimes.rs` (`system_detection`, `camera_trailing`) |
 | [11](11-pass-prediction.md) | `crates/orbit-prop` | `passes.rs` (judgment), `report/passes.rs` (table) |
 | [13](13-thresholds.md) | | `constants.rs` |
 

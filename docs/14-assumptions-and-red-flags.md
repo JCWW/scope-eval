@@ -13,6 +13,7 @@
 * **Linear spot interpolation.** Spot size between and beyond quoted field points is estimated linearly.
 * **Diffraction-based focus criterion.** The CFZ formula uses a standard diffraction criterion at 0.55 um. With seeing-limited images, practical tolerance can be somewhat looser, but fast systems remain demanding.
 * **Footprint estimate.** "Pixels in a star's footprint" is approximated as (pixels across)^2. A photometric aperture is typically larger, but the ratio between configurations is what matters.
+* **Gaussian point spread function.** Every blur (seeing, diffraction, optics, detector diffusion, pixel aperture) is treated as a Gaussian and added in quadrature. Real seeing has broader wings and diffraction has rings, so the brightest-pixel fraction is somewhat optimistic. An unlabelled RMS spot is read as a radius, the larger blur. See [page 17](17-point-spread-function.md#what-the-model-leaves-out).
 
 ### Motion and regimes
 
@@ -57,6 +58,6 @@
 
 ## Check it yourself
 
-1. **Seeing sensitivity.** Evaluate the DeltaRho 350 + IMX455 at 1.5", 2.5" and 3.5" seeing (**Change site conditions**). Check 2 should move from about 2.0 to 3.4 to 4.7 pixels across, and check 4's star growth should shrink as seeing worsens, because a larger seeing blur hides the optics.
+1. **Seeing sensitivity.** Evaluate the DeltaRho 350 + IMX455 at 1.5", 2.5" and 3.5" seeing (**Change site conditions**). Check 2 should move from about 3.0 to 4.0 to 5.2 pixels across (the optics' fixed blur keeps the good-seeing figure from falling further), and check 4's star growth should shrink as seeing worsens, because a larger seeing blur hides the optics.
 2. **Small-angle error.** For the RASA 11's 3.33 deg field, compare 2 x atan(18.0 / 620) in degrees (3.327) with 36.0 / 620 x 57.2958 (3.327). The difference is under 0.1%.
 3. **Obstruction red flag.** 0.49^2 = 0.24, so "49% by diameter" and "24% by area" describe the same telescope.

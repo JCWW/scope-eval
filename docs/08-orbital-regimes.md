@@ -152,11 +152,11 @@ Example with the IMX455 (6,388 rows x 39.028 us = 0.249 s readout):
 **Question.** How long can an exposure be before relative motion smears something?
 
 ```
-crossing time (s)      = seeing FWHM (") / rate vs stars ("/s)
+crossing time (s)      = star FWHM (") / rate vs stars ("/s)
 streak per second (px) = rate vs stars / binned plate scale
 ```
 
-The target and the stars move relative to each other, so one of them always smears in long exposures: the target if the mount follows the stars, the stars if the mount follows the target. For LEO the crossing time is under a millisecond (2.5 / 3,140 = 0.8 ms), which is why LEO observing means rate tracking with streaked stars. For cislunar it is 2.5 / 0.549 = 4.6 s.
+The star FWHM is the recorded star from the [point spread function budget](17-point-spread-function.md): 3.03" for the DeltaRho 350 + IMX455 at 2.5" seeing. The target and the stars move relative to each other, so one of them always smears in long exposures: the target if the mount follows the stars, the stars if the mount follows the target. For LEO the crossing time is under a millisecond (3.03 / 3,140 = 0.97 ms), which is why LEO observing means rate tracking with streaked stars. For cislunar it is 3.03 / 0.549 = 5.5 s.
 
 ---
 
@@ -249,6 +249,6 @@ This is the demo's DeltaRho 350 + IMX455 on an L-350 with GPS timestamps. Readin
 | L-350 keyhole on LEO | `cargo test keyhole_l350_leo` |
 | GEO timing requirement | `cargo test geo_timing_requirement` |
 
-**In the tool.** Run `cargo run --release -- --demo` and find the MEO block of the detailed breakdown for DeltaRho 350 + IMX455. Its header should read `vs stars 39.54"/s`, and the checks should show an acquisition margin of 46.8x, a dwell of 119.3 s, a timing requirement of 9.3 ms, a skew of 9.9" and a crossing time of 63.2 ms. In the comparison's regime matrix, the CDK17 row should start with `F` for LEO (its telescope fails acquisition).
+**In the tool.** Run `cargo run --release -- --demo` and find the MEO block of the detailed breakdown for DeltaRho 350 + IMX455. Its header should read `vs stars 39.54"/s`, and the checks should show an acquisition margin of 46.8x, a dwell of 119.3 s, a timing requirement of 9.3 ms, a skew of 9.9" and a crossing time of 76.6 ms. In the comparison's regime matrix, the CDK17 row should start with `F` for LEO (its telescope fails acquisition).
 
 Next: [Mount dynamics](09-mount-dynamics.md).

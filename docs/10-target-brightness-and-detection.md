@@ -48,15 +48,17 @@ The `10^(-0.4 m)` term is the magnitude definition run backwards: each magnitude
 Exposure is not a separate input. It follows from how the target moves relative to the mount (its **residual rate**):
 
 * A target the mount holds still (rate-tracked LEO, MEO and HEO, or GEO in stare mode) does not trail, so nothing bounds the exposure but a 30 s cap.
-* A target tracked sidereally (cislunar) drifts at its rate against the stars, and the natural exposure is the one that keeps its trail inside a single seeing disk.
+* A target tracked sidereally (cislunar) drifts at its rate against the stars, and the natural exposure is the one that keeps its trail inside a single star width.
+
+The star width is the recorded star FWHM from the [point spread function budget](17-point-spread-function.md): seeing, diffraction, optics, detector diffusion and the pixel aperture, added in quadrature. For the DeltaRho 350 + IMX455 at 2.5" seeing it is **3.03"**.
 
 ```
-exposure       = seeing / residual rate     (capped at MAX_EXPOSURE_S = 30 s)
+exposure       = star / residual rate     (capped at MAX_EXPOSURE_S = 30 s)
 trail          = residual rate x exposure
-footprint (px) = (seeing / scale) x ((seeing + trail) / scale)
+footprint (px) = (star / scale) x ((star + trail) / scale)
 ```
 
-**Worked example (cislunar, 2.5" seeing, native 0.7386 "/px).** The Moon's rate against the stars is 0.549 "/s, so the exposure is 2.5 / 0.549 = **4.554 s**, the trail is 2.5" by construction, and the footprint is 2.5 x 5.0 / 0.7386^2 = **22.914 px**.
+**Worked example (cislunar, 3.03" star, native 0.7386 "/px).** The Moon's rate against the stars is 0.549 "/s, so the exposure is 3.03 / 0.549 = **5.519 s**, the trail is 3.03" by construction, and the footprint is 3.03 x 6.06 / 0.7386^2 = **33.66 px**. With the 2.5" seeing alone as the star, these would be 4.554 s and 22.91 px.
 
 You can override the exposure. If your choice trails the target off the sensor, the tool says so and will not report a PASS.
 
@@ -95,17 +97,19 @@ For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21
 
 | Regime | Mode | Exposure | Target mag | SNR | Limiting mag | Margin | Verdict |
 |---|---|---|---|---|---|---|---|
-| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 20.06 | +17.8 | trivial |
-| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 20.06 | +9.8 | trivial |
-| GEO | stare | 30 s (capped) | 11.59 | 526 | 20.06 | +8.5 | trivial |
-| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 20.06 | +8.3 | trivial |
-| Cislunar | sidereal | 4.554 s (trail-limited) | 16.67 | 14.9 | 18.16 | +1.5 | graded |
+| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 19.87 | +17.6 | trivial |
+| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 19.87 | +9.6 | trivial |
+| GEO | stare | 30 s (capped) | 11.59 | 526 | 19.87 | +8.3 | trivial |
+| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 19.87 | +8.1 | trivial |
+| Cislunar | sidereal | 5.519 s (trail-limited) | 16.67 | 15.4 | 18.15 | +1.5 | graded |
 
 Two things in that table are worth reading twice.
 
-The limiting magnitude is **identical at 20.06 for all four stationary-target regimes**. That is not a coincidence: they share an exposure (the 30 s cap), a zero trail, and therefore the same footprint and noise budget. They differ only in how bright the target is.
+The limiting magnitude is **identical at 19.87 for all four stationary-target regimes**. That is not a coincidence: they share an exposure (the 30 s cap), a zero trail, and therefore the same footprint and noise budget. They differ only in how bright the target is.
 
 And four of the five regimes sit above `SNR_TRIVIAL` (100), so the tool reports "detection is not the limiting factor" instead of a graded margin. That is the right answer rather than a mis-set threshold: a 14-inch aperture at 30 seconds genuinely does not struggle with anything nearer than the Moon. Cislunar is the only regime where detection is close.
+
+**Centroid precision.** Each detection check also prints the photon-limited centroid precision, sigma = star FWHM / 2.355 / SNR per axis: 2.4 milliarcseconds at GEO, 83 at cislunar. Sky, read noise and coarse pixels all make the real figure larger, so read it as a best case.
 
 **Grading.** PASS at SNR 10 or more (`SNR_PASS`), WARN at 5 or more (`DETECT_SNR_THRESHOLD`) and FAIL below. At `SNR_TRIVIAL` or above the status is still PASS, but the verdict says detection is not what limits the regime and names what does. A PASS also drops to WARN if the exposure trails the target off the sensor. Where QE, throughput, sky brightness or read noise come from generic defaults rather than entered values, the check is capped at WARN and names what it assumed. It will not tell you a configuration will detect something on the strength of a quantum efficiency it invented.
 
@@ -119,8 +123,8 @@ And four of the five regimes sit above `SNR_TRIVIAL` (100), so the tool reports 
 2. **Range scaling.** Cislunar is 384,400 / 37,000 = 10.4 times further than GEO. 5 x log10(10.4) = 5.08 mag, and 11.59 + 5.08 = **16.67**.
 3. **Photon constant.** 3.21e-9 / 3.61e-19 = **8.9e9** photons per m^2 per s.
 4. **Sky per pixel.** 8.9e9 x 10^(-0.4 x 21) x 0.0660 x 0.80 x 0.85 x 0.7386^2 = **0.87 e- per pixel per second**.
-5. **GEO SNR.** Footprint = (2.5 / 0.7386)^2 = 11.46 px. S = 8.9e9 x 10^(-0.4 x 11.59) x 0.0660 x 0.80 x 0.85 x 30 = 277,000 e-. B = 0.867 x 30 x 11.46 = 298 e-. Read term = 9 x 11.46 = 103. SNR = 277,000 / sqrt(277,000 + 298 + 103) = **526**.
-6. **Cislunar limiting magnitude.** With the footprint of 22.91 px and exposure 4.554 s: B = 0.867 x 4.554 x 22.91 = 90.5, N = 90.5 + 9 x 22.91 = 296.7. S_min = (25 + sqrt(625 + 100 x 296.7)) / 2 = 99.5 e-. K = 8.9e9 x 0.0660 x 0.80 x 0.85 x 4.554 = 1.82e9. m_limit = -2.5 x log10(99.5 / 1.82e9) = **18.15**. The tool prints 18.16 because it carries full precision through every step (the unrounded value is 18.155).
+5. **GEO SNR.** Footprint = (3.03 / 0.7386)^2 = 16.83 px. S = 8.9e9 x 10^(-0.4 x 11.59) x 0.0660 x 0.80 x 0.85 x 30 = 277,000 e-. B = 0.867 x 30 x 16.83 = 438 e-. Read term = 9 x 16.83 = 151. SNR = 277,000 / sqrt(277,000 + 438 + 151) = **526**. The bigger star barely matters here: the target's own shot noise dominates.
+6. **Cislunar limiting magnitude.** With the footprint of 33.66 px and exposure 5.519 s: B = 0.867 x 5.519 x 33.66 = 161.1, N = 161.1 + 9 x 33.66 = 464.0. S_min = (25 + sqrt(625 + 100 x 464.0)) / 2 = 120.9 e-. K = 8.9e9 x 0.0660 x 0.80 x 0.85 x 5.519 = 2.204e9. m_limit = -2.5 x log10(120.9 / 2.204e9) = **18.15**.
 
 **Against the tests.**
 
@@ -133,8 +137,9 @@ And four of the five regimes sit above `SNR_TRIVIAL` (100), so the tool reports 
 | GEO and cislunar SNR | `cargo test snr_deltarho350` |
 | Limiting magnitude inverts the SNR equation | `cargo test limiting_mag` |
 | Stationary regimes share a limit; only cislunar grades | `cargo test stationary_regimes_share` and `cargo test cislunar_is_the_only_regime` |
+| Footprint and centroid use the system-PSF star | `cargo test detection_footprint_is_the_recorded_star` and `cargo test detection_reports_centroid_precision` |
 | The WARN cap on assumed inputs | `cargo test detection_caps_at_warn` and `cargo test detection_passes_when_every_input_is_entered` |
 
-**In the tool.** Run `cargo run --release -- --demo` and read the System: Detection check in each regime block for DeltaRho 350 + IMX455. LEO through HEO should show a limiting magnitude of 20.06; cislunar should show a footprint of 22.9 px, SNR 14.9 and limiting magnitude 18.16, capped at WARN with the assumed inputs listed. The test `detection_passes_when_every_input_is_entered` shows the other side: with every input entered, the same configuration's GEO detection grades PASS and names nothing as assumed.
+**In the tool.** Run `cargo run --release -- --demo` and read the System: Detection check in each regime block for DeltaRho 350 + IMX455. LEO through HEO should show a footprint of 16.8 px and a limiting magnitude of 19.87; cislunar should show an exposure of 5.519 s, a footprint of 33.7 px, SNR 15.4 and limiting magnitude 18.15, capped at WARN with the assumed inputs listed. The test `detection_passes_when_every_input_is_entered` shows the other side: with every input entered, the same configuration's GEO detection grades PASS and names nothing as assumed.
 
 Next: [Pass prediction](11-pass-prediction.md).

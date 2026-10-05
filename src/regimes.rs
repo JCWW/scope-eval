@@ -15,10 +15,11 @@ use crate::calculations::detection::DetectionCalculator;
 use crate::calculations::mount::MountDynamicsCalculator;
 use crate::calculations::optics::OpticsCalculator;
 use crate::calculations::orbit::OrbitCalculator;
+use crate::calculations::psf::PsfCalculator;
 use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
     DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN,
-    EARTH_RADIUS_KM, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
+    EARTH_RADIUS_KM, MAS_PER_ARCSEC, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
     SIDEREAL_RATE_ARCSEC_PER_S,
 };
 use crate::constants::plausible_ranges as ranges;
@@ -444,20 +445,20 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
 }
 
 /// How long can an exposure be before relative motion smears something (informational).
-fn camera_trailing(cfg: &Config, ev: &Evaluation, r: &Regime, seeing: f64) -> RegimeCheck {
-    let _ = cfg;
+fn camera_trailing(ev: &Evaluation, r: &Regime) -> RegimeCheck {
+    let star = ev.metrics.star_fwhm_arcsec;
     let binned = CameraTimingCalculator::binned_plate_scale_arcsec_per_px(
         ev.metrics.plate_scale,
         ev.metrics.recommended_bin,
     );
-    let t_cross = CameraTimingCalculator::crossing_time_s(seeing, r.rate_vs_stars);
+    let t_cross = CameraTimingCalculator::crossing_time_s(star, r.rate_vs_stars);
     let streak_px = CameraTimingCalculator::pixels_per_second(r.rate_vs_stars, binned);
     RegimeCheck {
         component: Component::Camera,
         title: "Exposure vs trailing",
         status: Status::Info,
         details: vec![
-            kv("Relative motion crosses one seeing FWHM in", fmt_duration(t_cross)),
+            kv("Relative motion crosses one star FWHM in", fmt_duration(t_cross)),
             kv("Streak length per second of exposure", format!("{streak_px:.0} px (binned)")),
             kv("Usual observing mode", r.mode.describe().to_string()),
         ],
@@ -778,15 +779,17 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         ),
     };
     let residual = residual_rate_arcsec_s(r);
+    // The recorded star (system PSF at the sensor centre), not the seeing alone.
+    let star = ev.metrics.star_fwhm_arcsec;
     let (exposure, exp_from) = match cfg.exposure_override_s {
         Some(t) => (t, "entered"),
-        None => (DetectionCalculator::trail_limited_exposure_s(site.seeing_arcsec, residual), "derived"),
+        None => (DetectionCalculator::trail_limited_exposure_s(star, residual), "derived"),
     };
 
     let scale = ev.metrics.plate_scale;
     let area = ev.metrics.effective_area_m2;
     let trail = DetectionCalculator::trail_arcsec(residual, exposure);
-    let n_px = DetectionCalculator::footprint_px(site.seeing_arcsec, trail, scale);
+    let n_px = DetectionCalculator::footprint_px(star, trail, scale);
     let signal = DetectionCalculator::signal_e_per_s(target_mag, area, p.qe, p.throughput) * exposure;
     let sky = DetectionCalculator::sky_e_per_px_s(p.sky_mag_arcsec2, scale, area, p.qe, p.throughput)
         * exposure
@@ -806,6 +809,15 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         kv("Footprint", format!("{n_px:.1} px")),
         kv("Signal / sky", format!("{signal:.0} e- / {sky:.0} e-")),
         kv("SNR", format!("{snr:.1}")),
+        kv(
+            "Centroid precision (photon-limited)",
+            if snr > 0.0 {
+                let sigma = PsfCalculator::centroid_sigma(star, snr);
+                format!("{:.2} mas ({:.4} px) per axis, 1 sigma", sigma * MAS_PER_ARCSEC, sigma / scale)
+            } else {
+                "no signal".to_string()
+            },
+        ),
         kv("Limiting magnitude", format!("{m_limit:.2}")),
         kv("Margin", format!("{:+.2} mag", m_limit - target_mag)),
     ];
@@ -874,7 +886,7 @@ pub fn evaluate_regimes(
                 telescope_depth(ev, &r, reference_area),
                 camera_timing(cfg, ev, &r),
                 camera_shutter(cfg, ev, &r),
-                camera_trailing(cfg, ev, &r, site.seeing_arcsec),
+                camera_trailing(ev, &r),
                 mount_rate(cfg, &r),
                 mount_acceleration(cfg, &r),
                 mount_slew_settle(cfg, &r),
@@ -1220,15 +1232,35 @@ mod tests {
     }
 
     #[test]
+    fn detection_footprint_is_the_recorded_star() {
+        // The system PSF, not the seeing alone: (3.030 / 0.7386)^2 = 16.83 px
+        // against (2.5 / 0.7386)^2 = 11.46 px with seeing only.
+        let (cfg, site) = fully_specified();
+        let c = detection("GEO", &cfg, &site);
+        assert!(close(detail_number(&c, "Footprint"), 16.8, 0.05));
+    }
+
+    #[test]
+    fn detection_reports_centroid_precision() {
+        // sigma = FWHM / 2.355 / SNR, so a better SNR gives a tighter centroid.
+        let (cfg, site) = fully_specified();
+        let geo = detection("GEO", &cfg, &site);
+        let snr = detail_number(&geo, "SNR");
+        let centroid = detail_number(&geo, "Centroid precision");
+        assert!(close(centroid, 3030.0 / 2.3548 / snr, 0.1), "centroid {centroid} mas at SNR {snr}");
+    }
+
+    #[test]
     fn stationary_regimes_share_a_limiting_magnitude() {
         // LEO, MEO, GEO and HEO all hold the target still, so they share an
         // exposure, a zero trail, a footprint and a noise budget, and
-        // therefore a limiting magnitude of 20.06. They differ only in target
+        // therefore a limiting magnitude of 19.87 (the footprint is the
+        // 3.03" recorded star, 16.8 px). They differ only in target
         // magnitude. A guard against the noise terms picking up a spurious
         // range dependence.
         let (cfg, site) = fully_specified();
         let leo = detail_number(&detection("LEO", &cfg, &site), "Limiting magnitude");
-        assert!(close(leo, 20.06, 0.02), "LEO limiting magnitude {leo}");
+        assert!(close(leo, 19.87, 0.02), "LEO limiting magnitude {leo}");
         for key in ["MEO", "GEO", "HEO"] {
             let m = detail_number(&detection(key, &cfg, &site), "Limiting magnitude");
             assert!(close(m, leo, 0.001), "{key} limiting magnitude {m} differs from LEO {leo}");

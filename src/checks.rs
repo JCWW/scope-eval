@@ -11,6 +11,7 @@ use crate::constants::{
     TIMING_ERROR_EXAMPLE_S,
 };
 use crate::model::{Camera, Config, Shutter, Site, SpotConvention, Telescope};
+use crate::psf::{FieldPoint, PsfBudget};
 use crate::regimes::{evaluate_regimes, RegimeEvaluation};
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,10 @@ pub struct CheckResult {
 pub struct Metrics {
     pub f_ratio: f64,
     pub plate_scale: f64,
+    /// Pixels across the sampled image's FWHM at the sensor centre.
     pub pixels_across: f64,
+    /// Recorded star FWHM at the sensor centre, arcsec (system PSF).
+    pub star_fwhm_arcsec: f64,
     pub recommended_bin: u32,
     pub fov_w_deg: f64,
     pub fov_h_deg: f64,
@@ -67,6 +71,8 @@ pub struct Evaluation {
     pub label: String,
     pub metrics: Metrics,
     pub checks: Vec<CheckResult>,
+    /// The system point spread function behind checks 2 and 3 and detection.
+    pub psf: PsfBudget,
     pub supplementary: Vec<String>,
     /// Component evaluations against each orbital regime (see regimes.rs).
     pub regimes: Vec<RegimeEvaluation>,
@@ -144,17 +150,30 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
 }
 
 /// Check 2: is a star spread across the right number of pixels?
+///
+/// The star is the image the pixels sample (seeing, diffraction, optics and
+/// detector diffusion: see `psf.rs`) at the sensor centre.
 /// Returns the check plus (plate scale, pixels across, recommended bin).
-pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f64, f64, u32) {
-    let scale = OpticsCalculator::plate_scale_arcsec_per_px(c.pixel_um, t.focal_length_mm);
-    let p = OpticsCalculator::pixels_across_star(site.seeing_arcsec, scale);
+pub fn check_sampling(c: &Camera, site: &Site, psf: &PsfBudget) -> (CheckResult, f64, f64, u32) {
+    let scale = psf.plate_scale;
+    let star = psf.sampled_fwhm(FieldPoint::Center);
+    let p = OpticsCalculator::pixels_across_star(star, scale);
     let bin = OpticsCalculator::best_bin(p);
     let footprint = OpticsCalculator::star_footprint_px(p);
     let ideal_footprint = limits::SAMPLING_TARGET * limits::SAMPLING_TARGET;
 
     let mut details = vec![
         kv("Plate scale (native)", format!("{scale:.3}\"/px")),
+        kv("Star FWHM (system PSF, center)", format!("{star:.2}\"  (seeing alone {:.2}\")", site.seeing_arcsec)),
         kv("Pixels across a star (native)", format!("{p:.2}  (target {:.1})", limits::SAMPLING_TARGET)),
+    ];
+    if let Some(alt) = psf.sampled_fwhm_if_diameter(FieldPoint::Center) {
+        details.push(kv(
+            "If the spot figure is an RMS diameter",
+            format!("{alt:.2}\", {:.2} px across  (radius assumed above)", alt / scale),
+        ));
+    }
+    details.extend([
         kv("Best square bin", format!("{bin}x{bin}")),
         kv(
             "After binning",
@@ -168,7 +187,7 @@ pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f
                 OpticsCalculator::read_noise_variance_penalty(footprint, ideal_footprint)
             ),
         ),
-    ];
+    ]);
     if let Some(r) = c.read_noise_e {
         details.push(kv(
             "Read-noise variance per star",
@@ -215,14 +234,15 @@ pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site) -> (CheckResult, f
 }
 
 /// Check 3: what pixel size does this telescope want, and does the camera provide it?
-pub fn check_ideal_pixel(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
-    let ideal = OpticsCalculator::ideal_pixel_um(site.seeing_arcsec, t.focal_length_mm);
+/// Sized to the same system-PSF star as check 2.
+pub fn check_ideal_pixel(t: &Telescope, c: &Camera, psf: &PsfBudget) -> CheckResult {
+    let ideal = OpticsCalculator::ideal_pixel_um(psf.sampled_fwhm(FieldPoint::Center), t.focal_length_mm);
     let (b, effective) = OpticsCalculator::closest_binned_pixel_um(c.pixel_um, ideal);
     let m = effective / ideal;
     let in_range = (limits::PIXEL_MATCH_LOW..=limits::PIXEL_MATCH_HIGH).contains(&m);
 
     let details = vec![
-        kv("Ideal pixel for this focal length", format!("{ideal:.1} um")),
+        kv("Ideal pixel for this star (system PSF)", format!("{ideal:.1} um")),
         kv("Camera pixel", format!("{:.2} um  (ratio {:.2})", c.pixel_um, c.pixel_um / ideal)),
         kv("Closest binned match", format!("{b}x{b} -> {effective:.2} um  (ratio {m:.2})")),
     ];
@@ -573,9 +593,10 @@ pub fn geo_motion_and_timing(c: &Camera, plate_scale: f64, bin: u32) -> Vec<Stri
 pub fn evaluate(cfg: &Config, site: &Site, reference: Option<&Reference>) -> Evaluation {
     let t = &cfg.telescope;
     let c = &cfg.camera;
+    let psf = PsfBudget::resolve(t, c, site);
     let fit = check_sensor_fit(t, c);
-    let (sampling, scale, px_across, bin) = check_sampling(t, c, site);
-    let ideal = check_ideal_pixel(t, c, site);
+    let (sampling, scale, px_across, bin) = check_sampling(c, site, &psf);
+    let ideal = check_ideal_pixel(t, c, &psf);
     let optics = check_optics(t, c, site);
     let (area_check, area) = check_area_depth(t, reference);
     let (fov_check, fov_w, fov_h, etendue) = check_field_and_search(t, c, area, reference);
@@ -589,6 +610,7 @@ pub fn evaluate(cfg: &Config, site: &Site, reference: Option<&Reference>) -> Eva
             f_ratio: t.f_ratio(),
             plate_scale: scale,
             pixels_across: px_across,
+            star_fwhm_arcsec: psf.recorded_fwhm(FieldPoint::Center),
             recommended_bin: bin,
             fov_w_deg: fov_w,
             fov_h_deg: fov_h,
@@ -599,6 +621,7 @@ pub fn evaluate(cfg: &Config, site: &Site, reference: Option<&Reference>) -> Eva
             payload_fraction,
         },
         checks: vec![fit, sampling, ideal, optics, area_check, fov_check, focus, practical],
+        psf,
         supplementary,
         regimes: Vec::new(),
     };

@@ -34,6 +34,7 @@ Obstruction can be typed as a percent (56) or a decimal (0.56). The tool treats 
 | Sensor width and height | pixels | Camera spec sheet | Checks 1, 6 |
 | Read noise | e- RMS | Camera spec sheet (optional, 3 e- assumed if blank) | Check 2, regime: detection |
 | Quantum efficiency | fraction 0..1 | Camera QE curve (optional, 0.80 assumed if blank) | Regime: detection |
+| Detector MTF at Nyquist | fraction 0..1 | A measured MTF curve, read at half a cycle per pixel (optional; blank counts the pixel aperture only) | Checks 2, 3, regime: detection ([page 17](17-point-spread-function.md)) |
 | Shutter type and line time | rolling/global, us | Camera manual (optional) | Timing reference, regime: camera |
 | Camera weight | lb | Camera spec sheet (optional) | Check 8 |
 
