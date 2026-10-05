@@ -27,7 +27,7 @@ pub const ARCSEC_PER_CIRCLE: f64 = 1_296_000.0;
 /// An overhead pass has `theta(t) = atan(v t / h)`, so with `u = v t / h`,
 /// `theta'' = -2 (v/h)^2 u / (1 + u^2)^2`. That peaks at `u = 1/sqrt(3)`,
 /// giving `(2/sqrt(3)) / (4/3)^2 = 3 sqrt(3) / 8`. A derived constant, not a
-/// tuned threshold. See README.md.
+/// tuned threshold. See docs/09-mount-dynamics.md.
 pub const PEAK_ACCEL_COEFF: f64 = 0.649_519_052_838_329;
 /// Apparent V magnitude of the Sun.
 pub const SUN_APPARENT_MAG: f64 = -26.74;

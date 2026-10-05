@@ -162,7 +162,7 @@ pub fn print_comparison(evals: &[Evaluation]) {
 pub fn print_formulas() {
     println!(
         r#"
-Formula summary (full explanations in README.md)
+Formula summary (full explanations in docs/README.md)
 
  1 Sensor fit        image circle >= sensor diagonal = sqrt(w^2 + h^2)
  2 Plate scale       scale ("/px) = 206.265 x pixel (um) / focal length (mm)

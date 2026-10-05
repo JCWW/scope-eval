@@ -4,10 +4,10 @@ An interactive command-line calculator, written in Rust, that evaluates a **tele
 
 The tool works in two layers:
 
-1. **Eight general checks** on the optical system: plate scale, sampling, field of view, collecting area, search speed, focus tolerance and payload margin. These don't depend on what you are looking at.
-2. **Orbital-regime evaluations.** The telescope, camera and mount are each evaluated separately against five orbital regimes: low Earth orbit (LEO), medium Earth orbit (MEO), geosynchronous orbit (GEO), highly elliptical orbit (HEO) and cislunar space. A configuration that is excellent for GEO can be unusable for LEO, and these checks show which component is the reason.
+1. **Eight general checks** on the optical system: sensor fit, sampling, ideal pixel size, optics vs seeing, collecting area, field and search speed, focus tolerance and practical fit. These don't depend on what you are looking at.
+2. **Orbital-regime evaluations.** The telescope, camera, mount and overall detection system are each graded against five orbital regimes: low Earth orbit (LEO), medium Earth orbit (MEO), geosynchronous orbit (GEO), highly elliptical orbit (HEO) and cislunar space. A configuration that is excellent for GEO can be unusable for LEO, and these checks show which component is the reason.
 
-You pick hardware from built-in presets or type in numbers from any spec sheet. Every result is graded PASS, WARN, FAIL or INFO with a plain-English explanation. Evaluate several configurations and the tool prints a side-by-side comparison, including a regime-by-component matrix.
+You pick hardware from built-in presets or type in numbers from any spec sheet. Every result is graded PASS, WARN, FAIL or INFO with a plain-English explanation. Evaluate several configurations and the tool prints a side-by-side comparison. It can also predict real passes of a satellite over your site and judge whether each mount can follow them.
 
 The tool has three external dependencies, all pure Rust: `serde` and `serde_yaml` read `presets.yaml`, and `sgp4` propagates satellite orbits inside the bundled `orbit-prop` library (`crates/orbit-prop`). The code is small enough to audit.
 

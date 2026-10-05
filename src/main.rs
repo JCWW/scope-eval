@@ -1,7 +1,7 @@
 //! scope-eval: interactive telescope + camera evaluation calculator.
 //!
 //! Run with no arguments for the interactive menu, `--demo` for a canned
-//! comparison of the presets, or `--help` for usage. See README.md for the
+//! comparison of the presets, or `--help` for usage. See docs/README.md for the
 //! full explanation of every calculation.
 
 mod calculations;
@@ -63,7 +63,7 @@ USAGE:
   scope-eval --demo     evaluate the built-in presets and print a comparison
   scope-eval --help     this message
 
-See README.md for the formulas and the algorithm.",
+See docs/README.md for the formulas and the algorithm.",
         env!("CARGO_PKG_VERSION")
     );
 }
