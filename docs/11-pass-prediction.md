@@ -20,7 +20,7 @@ The search runs in four steps (`crates/orbit-prop/src/passes.rs`):
 
 1. **Coarse scan.** Step through the window at one sixtieth of the orbital period, clamped to between 10 and 300 seconds (about 93 seconds for the ISS), watching for the elevation crossing the minimum.
 2. **Refine rise and set.** Narrow each crossing by bisection to 0.1 s.
-3. **Sample the pass.** Every 1 s (and every 0.1 s within 30 s of culmination), record the axis rates, accelerations, satellite lighting and site darkness, keeping the peaks.
+3. **Sample the pass.** Every 1 s (longer for passes over 2 hours: the step is the larger of 1 s and the duration / 7200), and every 0.1 s within 30 s of culmination, record the axis rates, accelerations, satellite lighting and site darkness, keeping the peaks.
 4. **Refine culmination.** Find the exact peak elevation by golden-section search.
 
 A pass that stays above the minimum elevation for less than one coarse step can be missed. For LEO that means grazing passes that never get far above the minimum elevation.

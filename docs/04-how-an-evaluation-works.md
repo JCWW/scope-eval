@@ -77,7 +77,7 @@ If you disagree with a verdict, the question is usually whether the threshold su
 
 1. **Roll-up.** Run `cargo run --release -- --demo` and look at the compact regime table for DeltaRho 350 + IMX455. For each row, confirm that the Overall column equals the worst of the Telescope, Camera, Mount and System columns.
 2. **The reference rule.** In the interactive menu, evaluate the RASA 11 + IMX455 first and the DeltaRho 350 + IMX455 second. The DeltaRho's depth should read about +0.28 mag. Restart and evaluate them in the opposite order: now the RASA should read about -0.28 mag. Same physics, different reference.
-3. **INFO doesn't count.** In the demo's comparison table, checks 5 and 6 show `i` for every configuration, yet no configuration's overall status is affected by them.
+3. **INFO doesn't count.** In the demo's comparison table, checks 5 and 6 show `i` for every configuration. They are measurements for comparison, and the regime statuses never use them as grades.
 4. **System is a component.** `cargo test system_is_a_component` checks that the detection result rolls up like the other three.
 
 Next: [Image-quality checks](05-image-quality-checks.md).

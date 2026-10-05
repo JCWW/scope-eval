@@ -31,7 +31,7 @@ For the DeltaRho 350 binned 2x2 (1.48 "/px): 15.04 / 1.48 = **10 pixels per seco
 A satellite's reported position is only as good as the timestamp on the image. If the target moves at a rate relative to the stars, an error in time is an error in position:
 
 ```
-position error (") = rate (") x timing error (s)
+position error (") = rate ("/s) x timing error (s)
 ```
 
 For GEO, a 10 ms timing error gives 15.04 x 0.010 = 0.15" of along-track error. A computer clock plus USB latency can easily be off by tens of milliseconds, which is why hardware GPS timestamping matters. For comparison, a low Earth orbit object moving about 1 degree per second (3,600 "/s) picks up 3.6" of error per millisecond.

@@ -45,7 +45,7 @@ These are engineering rules of thumb, not physical laws. If your mission needs a
 
 ## Default assumptions
 
-These are substituted when an input is left blank. Each one is named in the report when used.
+These are substituted when an input is left blank. QE, throughput, sky brightness, read noise, pointing and settle time are named in the report when assumed. Seeing and timestamp accuracy are only prompt defaults, the wavelength is never flagged, and the reference target shows up only as a magnitude marked "(derived)".
 
 | Constant | Default | Used for |
 |---|---|---|

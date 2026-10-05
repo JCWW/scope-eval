@@ -195,7 +195,7 @@ The readings disagree, so the result is WARN: ask the vendor which convention th
 5. **CDK14 optics vs seeing.** The CDK14 quotes 3.1 um RMS at 13 mm and 6.0 um at 35 mm off-axis. The IMX455 corner is 21.6 mm off-axis.
    * Corner spot by interpolation: 3.1 + (21.6 - 13) / (35 - 13) x (6.0 - 3.1) = **4.2 um**.
    * Seeing blur: 2.5 x 2563 / 206.265 = **31.1 um**.
-   * Worst case (radius reading): FWHM = 1.665 x 4.2 = 7.0 um; growth = sqrt(31.1^2 + 7.0^2) / 31.1 - 1 = **2.5%**. PASS on either reading. Long focal lengths enlarge the seeing blur in micrometers, which makes the same spot size matter less.
+   * Worst case (radius reading): FWHM = 1.665 x 4.2 = 7.0 um; growth = sqrt(31.1^2 + 7.0^2) / 31.1 - 1 = **2.5%** (the tool rounds this to 3%). PASS on either reading. Long focal lengths enlarge the seeing blur in micrometers, which makes the same spot size matter less.
 6. **The CMOS binning table.** Recompute one row, for example sqrt(400 + 11 x 4) = 21.07 and 400 / 21.07 = 19.0.
 
 **Against the tests.** Each command runs the test that encodes the matching worked example:
