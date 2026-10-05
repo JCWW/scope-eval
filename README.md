@@ -57,6 +57,8 @@ The **first configuration you evaluate becomes the reference**. Depth and search
 
 Output is plain ASCII (for example `um` for micrometers and `"` for arcseconds) so it displays correctly in any terminal, including older Windows consoles.
 
+**Simulation dashboard.** [`dashboard/`](dashboard/README.md) is a separate React app that runs a time-stepped simulation of a configuration tracking a real pass. You can start and stop it, watch the pointing error on the sensor and the sky, and switch between configurations mid-pass. It uses the same presets and orbit library as this tool.
+
 ---
 
 ## Learning the concepts
@@ -440,7 +442,7 @@ Preset mounts leave pointing accuracy and TLE-tracking support blank on purpose.
 ## Code structure and extending the tool
 
 ```
-Cargo.toml     workspace: scope-eval (this directory) and crates/orbit-prop
+Cargo.toml     workspace: scope-eval (this directory), crates/orbit-prop, crates/scope-sim and crates/scope-sim-wasm
 src/
   main.rs      command-line entry point, interactive menus, pass-prediction prompts, --demo, --help
   model/       data types: Telescope, Camera, Mount, Site, Payload, Config, Obstruction, SpotSpec
@@ -457,6 +459,9 @@ src/
   passes_report.rs  pass table and the per-pass "Mount can follow?" judgment
   input.rs     validated terminal input helpers
 crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geometry, lighting, pass finding
+crates/scope-sim/   time-stepped simulation of a mount tracking a pass, with pointing error
+crates/scope-sim-wasm/  WebAssembly bindings for scope-sim
+dashboard/          React + Material UI dashboard that runs and visualizes the simulation
 docs/learning/      lessons on the concepts, plus check_examples.py, an independent check of every worked example
 ```
 

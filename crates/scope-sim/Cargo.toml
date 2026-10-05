@@ -1,0 +1,12 @@
+[package]
+name = "scope-sim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Time-stepped simulation of a telescope mount tracking a satellite pass, with pointing error"
+license = "MIT"
+
+[dependencies]
+orbit-prop = { path = "../orbit-prop" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
