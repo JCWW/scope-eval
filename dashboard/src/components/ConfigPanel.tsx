@@ -49,9 +49,15 @@ function PresetSelect({ label, value, options, onChange }: { label: string; valu
   );
 }
 
-function source(p: Param | undefined, override: number | null | undefined): string {
+function source(p: Param | [Param, Param] | undefined, override: number | null | undefined): string {
   if (override != null) return 'entered here';
   if (!p) return '';
+  if (Array.isArray(p)) {
+    const [a, b] = p;
+    if (a.value !== b.value || a.source !== b.source) return `per axis: ${a.value} / ${b.value}`;
+    p = a;
+  }
+  if (p.source === 'measured') return `blank: measured ${p.value}`;
   return p.assumed ? `blank: ${p.value} assumed` : `blank: preset value ${p.value}`;
 }
 
@@ -65,8 +71,8 @@ export function ConfigPanel(props: Props) {
     onChange({ ...config, mount_overrides: { ...o, [key]: value } });
   const assumed = m
     ? [
-        m.max_rate_deg_s.assumed && 'axis rate',
-        m.max_accel_deg_s2.assumed && 'axis acceleration',
+        m.max_rate_deg_s.some((p) => p.assumed) && 'axis rate',
+        m.max_accel_deg_s2.some((p) => p.assumed) && 'axis acceleration',
         m.pointing_rms_arcsec.assumed && 'pointing RMS',
         m.jitter_rms_arcsec.assumed && 'jitter',
         m.kind_assumed && 'mount type',

@@ -14,14 +14,18 @@ pub mod geometry;
 pub mod hardware;
 pub mod presets;
 pub mod rng;
+pub mod run;
 pub mod scenario;
 pub mod servo;
 pub mod sim;
 pub mod star;
 
 pub use error::SimError;
-pub use hardware::{Hardware, MountModel, Optics, Param};
-pub use presets::{ConfigSpec, MountOverrides, Presets};
-pub use scenario::{find_passes, PassList, PassSummary, ScenarioSpec, SiteSpec, TargetSpec};
-pub use sim::{Sample, SimInfo, Simulation, Summary, TrackPoint, Verdict};
+pub use hardware::{Hardware, MountModel, Optics, Param, Source};
+pub use presets::{ConfigSpec, MountOverrides, Presets, PRESETS_YAML};
+pub use run::{PassBy, PassChoice, RunFile, Trace};
+pub use scenario::{
+    find_passes, PassLightingLabel, PassList, PassSummary, ScenarioSpec, SiteDarkLabel, SiteSpec, TargetSpec,
+};
+pub use sim::{Sample, SimInfo, Simulation, Summary, TargetLighting, TrackPoint, Verdict, SCHEMA_VERSION};
 pub use star::{CenterCorner, Conditions, StarImage};

@@ -25,8 +25,20 @@ describe('engine', () => {
     for (const c of DEFAULT_CONFIGURATIONS) {
       const hw = resolveConfig(c);
       expect(hw.optics.fov_w_deg).toBeGreaterThan(0);
-      expect(hw.mount_model.max_rate_deg_s.value).toBeGreaterThan(0);
+      for (const p of hw.mount_model.max_rate_deg_s) {
+        expect(p.value).toBeGreaterThan(0);
+        expect(p.assumed).toBe(p.source === 'assumed');
+      }
     }
+  });
+
+  it('applies per-axis mount limits', () => {
+    const c = DEFAULT_CONFIGURATIONS[0]!;
+    const hw = resolveConfig({
+      ...c,
+      mount_overrides: { ...c.mount_overrides, max_rate_deg_s: 3, max_rate_deg_s_by_axis: [null, 1] },
+    });
+    expect(hw.mount_model.max_rate_deg_s.map((p) => p.value)).toEqual([3, 1]);
   });
 
   it('reports a bad configuration as an Error with the engine message', () => {
@@ -45,6 +57,8 @@ describe('engine', () => {
     const highest = passes.reduce((a, b) => (b.max_el_deg > a.max_el_deg ? b : a));
     const sim = new Simulation(DEFAULT_CONFIGURATIONS[0]!, iss, highest.index);
     try {
+      expect(sim.info.schema_version).toBe(1);
+      expect(sim.info.pointing_offset_arcsec).toHaveLength(2);
       expect(sim.info.pass.max_el_deg).toBeCloseTo(highest.max_el_deg, 6);
       expect(sim.samples()).toHaveLength(1);
       const step = sim.advance(10);

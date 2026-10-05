@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.70"
 description = "Interactive calculator that evaluates a telescope + camera pairing against eight optical checks"
 license = "MIT"
+default-run = "scope-eval"
 
 [dependencies]
 orbit-prop = { path = "crates/orbit-prop" }

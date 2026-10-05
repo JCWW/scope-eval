@@ -1,7 +1,7 @@
 //! The hardware a simulation runs: the optics that set the field of view,
 //! and the mount that has to keep the target in it.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::geometry::MountKind;
 
@@ -21,21 +21,66 @@ pub const DEFAULT_JITTER_RMS_ARCSEC: f64 = 1.0;
 /// error with a 0.25 s time constant.
 pub const SERVO_GAIN_PER_S: f64 = 4.0;
 
-/// A number that is either entered (from a preset or an override) or
-/// assumed. The dashboard shows which, as scope-eval does, so a result
-/// resting on an assumption is never mistaken for one resting on a spec.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// Where a figure came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// From a preset's spec sheet or typed in by the user.
+    Entered,
+    /// Fitted from recordings of the real hardware.
+    Measured,
+    /// A default, because nobody gave a figure.
+    Assumed,
+}
+
+/// A number and where it came from. The dashboard shows which, as
+/// scope-eval does, so a result resting on an assumption is never mistaken
+/// for one resting on a spec.
+///
+/// It is written as `{value, source, assumed}`; `assumed` repeats
+/// `source == "assumed"` for readers that predate `source`, and is how a
+/// `Param` without a `source` is read.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(into = "ParamJson", from = "ParamJson")]
 pub struct Param {
     pub value: f64,
-    pub assumed: bool,
+    pub source: Source,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ParamJson {
+    value: f64,
+    #[serde(default)]
+    source: Option<Source>,
+    #[serde(default)]
+    assumed: bool,
+}
+
+impl From<Param> for ParamJson {
+    fn from(p: Param) -> ParamJson {
+        ParamJson { value: p.value, source: Some(p.source), assumed: p.is_assumed() }
+    }
+}
+
+impl From<ParamJson> for Param {
+    fn from(j: ParamJson) -> Param {
+        let fallback = if j.assumed { Source::Assumed } else { Source::Entered };
+        Param { value: j.value, source: j.source.unwrap_or(fallback) }
+    }
 }
 
 impl Param {
     pub fn entered(value: f64) -> Param {
-        Param { value, assumed: false }
+        Param { value, source: Source::Entered }
+    }
+    pub fn measured(value: f64) -> Param {
+        Param { value, source: Source::Measured }
     }
     pub fn assumed(value: f64) -> Param {
-        Param { value, assumed: true }
+        Param { value, source: Source::Assumed }
+    }
+    pub fn is_assumed(&self) -> bool {
+        self.source == Source::Assumed
     }
     /// The first of `values` that is present, else `default`, assumed.
     pub fn first_or(values: &[Option<f64>], default: f64) -> Param {
@@ -43,7 +88,7 @@ impl Param {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Optics {
     pub aperture_mm: f64,
     pub focal_length_mm: f64,
@@ -77,13 +122,14 @@ impl Optics {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MountModel {
     pub kind: MountKind,
     /// True when the preset's mount type was unknown and alt-az was assumed.
     pub kind_assumed: bool,
-    pub max_rate_deg_s: Param,
-    pub max_accel_deg_s2: Param,
+    /// Per axis: azimuth then elevation, or hour angle then declination.
+    pub max_rate_deg_s: [Param; 2],
+    pub max_accel_deg_s2: [Param; 2],
     /// Static pointing-model error, total RMS on the sky.
     pub pointing_rms_arcsec: Param,
     /// Short-term tracking jitter, total RMS on the sky.
@@ -92,7 +138,7 @@ pub struct MountModel {
 }
 
 /// A fully resolved configuration: everything the simulation needs.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hardware {
     pub name: String,
     pub telescope: String,
@@ -119,5 +165,15 @@ mod tests {
     fn param_prefers_the_first_entered_value() {
         assert_eq!(Param::first_or(&[None, Some(3.0), Some(4.0)], 9.0), Param::entered(3.0));
         assert_eq!(Param::first_or(&[None, None], 9.0), Param::assumed(9.0));
+    }
+
+    #[test]
+    fn param_json_carries_source_and_reads_the_old_form() {
+        let json = serde_json::to_string(&Param::measured(2.5)).unwrap();
+        assert_eq!(json, r#"{"value":2.5,"source":"measured","assumed":false}"#);
+        let old: Param = serde_json::from_str(r#"{"value":5.0,"assumed":true}"#).unwrap();
+        assert_eq!(old, Param::assumed(5.0));
+        let back: Param = serde_json::from_str(&serde_json::to_string(&Param::assumed(1.0)).unwrap()).unwrap();
+        assert_eq!(back, Param::assumed(1.0));
     }
 }

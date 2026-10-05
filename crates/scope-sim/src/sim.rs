@@ -8,7 +8,7 @@
 //! pointing-model error drawn once per run and by short-term jitter. The
 //! pointing error is the true target's position in the camera frame.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use orbit_prop::illumination::{lighting, Lighting};
 use orbit_prop::sun_moon::sun_position_km;
@@ -19,7 +19,7 @@ use crate::geometry::{
     axes_from_enu, az_el_from_enu, camera_offset, enu_from_axes, enu_from_az_el, normalize, tangent_basis, wrap180,
     MountKind, Vec3,
 };
-use crate::hardware::Hardware;
+use crate::hardware::{Hardware, Param};
 use crate::rng::Rng;
 use crate::scenario::{passes_for, summarize, PassSummary, ScenarioSpec};
 use crate::servo::{Axis, AxisLimits, AxisStep, Wrap};
@@ -38,9 +38,33 @@ pub const JITTER_CORRELATION_S: f64 = 0.5;
 pub const FOV_PASS_FRACTION: f64 = 0.99;
 pub const FOV_WARN_FRACTION: f64 = 0.90;
 
+/// Version of the telemetry this crate writes: `SimInfo`, `Sample`,
+/// `Summary` and the trace file built from them. Raise it whenever a field
+/// is renamed, removed or changes meaning; adding a field does not need it.
+pub const SCHEMA_VERSION: u32 = 1;
+
 const ARCSEC_PER_RAD: f64 = 206_264.806;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// Whether the target is in sunlight, as `orbit_prop` judges it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetLighting {
+    Sunlit,
+    Penumbra,
+    Umbra,
+}
+
+impl From<Lighting> for TargetLighting {
+    fn from(l: Lighting) -> TargetLighting {
+        match l {
+            Lighting::Sunlit => TargetLighting::Sunlit,
+            Lighting::Penumbra => TargetLighting::Penumbra,
+            Lighting::Umbra => TargetLighting::Umbra,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sample {
     /// Seconds since the start of the pass.
     pub t_s: f64,
@@ -66,19 +90,20 @@ pub struct Sample {
     pub axis2_accel_deg_s2: f64,
     pub rate_limited: bool,
     pub accel_limited: bool,
-    /// "sunlit", "penumbra" or "umbra".
-    pub lighting: &'static str,
+    pub lighting: TargetLighting,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TrackPoint {
     pub t_s: f64,
     pub az_deg: f64,
     pub el_deg: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimInfo {
+    /// `SCHEMA_VERSION` of the crate that wrote this.
+    pub schema_version: u32,
     pub hardware: Hardware,
     pub target: String,
     pub pass: PassSummary,
@@ -87,15 +112,16 @@ pub struct SimInfo {
     pub truncated: bool,
     /// How far the true target runs ahead of the prediction, seconds.
     pub lead_s: f64,
-    pub axis_names: [&'static str; 2],
+    pub axis_names: [String; 2],
     pub step_s: f64,
     pub record_interval_s: f64,
-    /// The pointing-model error drawn for this run, camera x and y.
-    pub pointing_offset_arcsec: [f64; 2],
+    /// The pointing-model error drawn for this run, camera x and y. Only a
+    /// simulated sky knows it.
+    pub pointing_offset_arcsec: Option<[f64; 2]>,
     pub seed: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Pass,
@@ -103,7 +129,7 @@ pub enum Verdict {
     Fail,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Summary {
     /// Seconds simulated so far.
     pub t_s: f64,
@@ -191,7 +217,7 @@ impl Simulation {
         let lead_s = scenario.ephemeris_error_km / speed;
 
         let m = &hw.mount_model;
-        let lim = AxisLimits { max_rate: m.max_rate_deg_s.value, max_accel: m.max_accel_deg_s2.value };
+        let limits = [0, 1].map(|i| AxisLimits { max_rate: m.max_rate_deg_s[i].value, max_accel: m.max_accel_deg_s2[i].value });
         let wrap1 = match m.kind {
             MountKind::AltAz => Wrap::Full,
             MountKind::Equatorial => Wrap::Half,
@@ -214,7 +240,7 @@ impl Simulation {
             truncated: pass.duration_s() > MAX_SIM_S,
             lead_s,
             seed: scenario.seed,
-            limits: [lim, lim],
+            limits,
             axes: [Axis::at_rest(0.0, wrap1), Axis::at_rest(0.0, Wrap::None)],
             cmd: (0.0, 0.0),
             offset,
@@ -240,6 +266,7 @@ impl Simulation {
 
     pub fn info(&self) -> SimInfo {
         SimInfo {
+            schema_version: SCHEMA_VERSION,
             hardware: self.hw.clone(),
             target: self.target_label.clone(),
             pass: self.pass.clone(),
@@ -249,10 +276,11 @@ impl Simulation {
             axis_names: match self.hw.mount_model.kind {
                 MountKind::AltAz => ["Azimuth", "Elevation"],
                 MountKind::Equatorial => ["Hour angle", "Declination"],
-            },
+            }
+            .map(String::from),
             step_s: STEP_S,
             record_interval_s: RECORD_INTERVAL_S,
-            pointing_offset_arcsec: [self.offset.0 * ARCSEC_PER_RAD, self.offset.1 * ARCSEC_PER_RAD],
+            pointing_offset_arcsec: Some([self.offset.0 * ARCSEC_PER_RAD, self.offset.1 * ARCSEC_PER_RAD]),
             seed: self.seed,
         }
     }
@@ -313,13 +341,13 @@ impl Simulation {
         let in_fov_fraction = if self.t > 0.0 { (s.in_fov_s / t).min(1.0) } else { 1.0 };
         let m = &self.hw.mount_model;
         let mut assumed = Vec::new();
-        if m.max_rate_deg_s.assumed {
+        if m.max_rate_deg_s.iter().any(Param::is_assumed) {
             assumed.push("maximum axis rate");
         }
-        if m.max_accel_deg_s2.assumed {
+        if m.max_accel_deg_s2.iter().any(Param::is_assumed) {
             assumed.push("maximum axis acceleration");
         }
-        if m.pointing_rms_arcsec.assumed {
+        if m.pointing_rms_arcsec.is_assumed() {
             assumed.push("pointing RMS");
         }
         let pct = in_fov_fraction * 100.0;
@@ -456,11 +484,7 @@ impl Simulation {
     fn sample(&self) -> Sample {
         let l = self.latest.as_ref().expect("measured in new");
         let (bore_az, bore_el) = az_el_from_enu(l.boresight);
-        let lit = match lighting(l.target_r, sun_position_km(l.epoch)) {
-            Lighting::Sunlit => "sunlit",
-            Lighting::Penumbra => "penumbra",
-            Lighting::Umbra => "umbra",
-        };
+        let lit = lighting(l.target_r, sun_position_km(l.epoch)).into();
         Sample {
             t_s: self.t,
             utc: l.epoch.to_string(),
@@ -490,7 +514,7 @@ impl Simulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hardware::{MountModel, Optics, Param};
+    use crate::hardware::{MountModel, Optics};
     use crate::scenario::tests::iss_scenario;
     use crate::scenario::find_passes;
 
@@ -504,8 +528,8 @@ mod tests {
             mount_model: MountModel {
                 kind,
                 kind_assumed: false,
-                max_rate_deg_s: Param::entered(rate),
-                max_accel_deg_s2: Param::entered(accel),
+                max_rate_deg_s: [Param::entered(rate); 2],
+                max_accel_deg_s2: [Param::entered(accel); 2],
                 pointing_rms_arcsec: Param::entered(pointing),
                 jitter_rms_arcsec: Param::entered(jitter),
                 servo_gain_per_s: crate::hardware::SERVO_GAIN_PER_S,
@@ -539,7 +563,7 @@ mod tests {
     #[test]
     fn pointing_error_is_a_constant_offset() {
         let mut sim = Simulation::new(hardware(MountKind::AltAz, 1000.0, 1000.0, 60.0, 0.0), &iss_scenario(), lowest_pass()).unwrap();
-        let [ox, oy] = sim.info().pointing_offset_arcsec;
+        let [ox, oy] = sim.info().pointing_offset_arcsec.unwrap();
         let s = sim.run_to_end().unwrap();
         let expected = ox.hypot(oy);
         assert!(expected > 1.0, "drew a tiny offset: {expected}");
@@ -612,7 +636,7 @@ mod tests {
     #[test]
     fn assumed_figures_cap_the_verdict_at_warn() {
         let mut hw = hardware(MountKind::AltAz, 1000.0, 1000.0, 0.0, 0.0);
-        hw.mount_model.max_accel_deg_s2 = Param::assumed(1000.0);
+        hw.mount_model.max_accel_deg_s2[1] = Param::assumed(1000.0);
         let mut sim = Simulation::new(hw, &iss_scenario(), lowest_pass()).unwrap();
         let s = sim.run_to_end().unwrap();
         assert_eq!(s.verdict, Verdict::Warn);

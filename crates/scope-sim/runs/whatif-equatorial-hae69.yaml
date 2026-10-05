@@ -1,0 +1,29 @@
+# A what-if 550 km, 53 deg orbit (Starlink-like) followed by an
+# equatorial mount, the iOptron HAE69C, which publishes no slew rate, so
+# the result rests on an assumed one and cannot grade PASS.
+
+config:
+  name: DeltaRho 350 + IMX455 on HAE69C (equatorial)
+  telescope: PlaneWave DeltaRho 350 (14" f/3)
+  camera: Sony IMX455 full frame (Moravian C3-61000 PRO, QHY600 PRO)
+  mount: iOptron HAE69C-EC (strain-wave)
+
+scenario:
+  site: { lat_deg: 35.0, lon_deg: -100.0, alt_m: 100.0 }
+  target:
+    kind: kepler
+    name: 550 km, 53 deg
+    epoch: "2008-09-20T12:00:00Z"
+    perigee_km: 550
+    apogee_km: 550
+    inclination_deg: 53
+    raan_deg: 0
+    arg_perigee_deg: 0
+    mean_anomaly_deg: 0
+  start: "2008-09-20T12:00:00Z"
+  hours: 24
+  min_el_deg: 10
+  ephemeris_error_km: 0.0
+  seed: 3
+
+pass: highest

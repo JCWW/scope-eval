@@ -4,9 +4,13 @@
 
 export type MountKind = 'alt_az' | 'equatorial';
 
-/** A figure that came from a preset or the user (`assumed: false`), or a default. */
+/** Where a figure came from: a preset or the user, a fit to hardware recordings, or a default. */
+export type ParamSource = 'entered' | 'measured' | 'assumed';
+
+/** A figure and where it came from. `assumed` repeats `source === 'assumed'`. */
 export interface Param {
   value: number;
+  source: ParamSource;
   assumed: boolean;
 }
 
@@ -24,8 +28,9 @@ export interface Optics {
 export interface MountModel {
   kind: MountKind;
   kind_assumed: boolean;
-  max_rate_deg_s: Param;
-  max_accel_deg_s2: Param;
+  /** Per axis: azimuth then elevation, or hour angle then declination. */
+  max_rate_deg_s: [Param, Param];
+  max_accel_deg_s2: [Param, Param];
   pointing_rms_arcsec: Param;
   jitter_rms_arcsec: Param;
   servo_gain_per_s: number;
@@ -41,8 +46,12 @@ export interface Hardware {
 }
 
 export interface MountOverrides {
+  /** Both axes. */
   max_rate_deg_s?: number | null;
   max_accel_deg_s2?: number | null;
+  /** One axis each; wins over the both-axes figure for that axis. */
+  max_rate_deg_s_by_axis?: [number | null, number | null];
+  max_accel_deg_s2_by_axis?: [number | null, number | null];
   pointing_rms_arcsec?: number | null;
   jitter_rms_arcsec?: number | null;
 }
@@ -174,6 +183,8 @@ export interface TrackPoint {
 }
 
 export interface SimInfo {
+  /** SCHEMA_VERSION of the engine that wrote this. */
+  schema_version: number;
   hardware: Hardware;
   target: string;
   pass: PassSummary;
@@ -183,7 +194,8 @@ export interface SimInfo {
   axis_names: [string, string];
   step_s: number;
   record_interval_s: number;
-  pointing_offset_arcsec: [number, number];
+  /** Known only when the sky is simulated. */
+  pointing_offset_arcsec: [number, number] | null;
   seed: number;
 }
 
