@@ -252,7 +252,7 @@ fn custom_telescope() -> Telescope {
         1 => Obstruction::ByArea(input::ask_fraction("Obstruction, % of area")),
         _ => Obstruction::None,
     };
-    let image_circle_mm = input::ask_positive("Corrected image circle diameter, mm", None);
+    let image_circle_mm = Some(input::ask_positive("Corrected image circle diameter, mm", None));
     let back_focus_mm = input::ask_optional("Back focus available, mm", false);
     let weight_lb = input::ask_optional("Optical tube weight, lb", false);
     let throughput = input::ask_optional_hint(

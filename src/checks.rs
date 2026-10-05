@@ -102,7 +102,17 @@ pub(crate) fn kv(label: &str, value: String) -> String {
 /// Check 1: does the whole sensor fit inside the corrected image circle?
 pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
     let diag = c.diagonal_mm();
-    let ic = t.image_circle_mm;
+    let Some(ic) = t.image_circle_mm else {
+        let details = vec![
+            kv("Sensor size", format!("{:.1} x {:.1} mm", c.width_mm(), c.height_mm())),
+            kv("Sensor diagonal", format!("{diag:.1} mm")),
+            kv("Corrected image circle", "not published".to_string()),
+        ];
+        let verdict = format!(
+            "The vendor does not publish a corrected image circle. Ask whether a {diag:.0} mm diagonal is sharp to the corners."
+        );
+        return CheckResult { number: 1, title: "Sensor fit", status: Status::Warn, details, verdict };
+    };
     let details = vec![
         kv("Sensor size", format!("{:.1} x {:.1} mm", c.width_mm(), c.height_mm())),
         kv("Sensor diagonal", format!("{diag:.1} mm")),
@@ -623,5 +633,16 @@ mod tests {
         let a = Obstruction::ByDiameter(0.49).area_fraction();
         let b = Obstruction::ByArea(0.237).area_fraction();
         assert!(close(a, b, 0.004));
+    }
+
+    #[test]
+    fn sensor_fit_warns_when_no_image_circle_is_published() {
+        use super::{check_sensor_fit, Status};
+        let scopes = crate::presets::telescopes();
+        let rc20 = scopes.iter().find(|t| t.name.contains("RC20")).unwrap();
+        assert_eq!(rc20.image_circle_mm, None);
+        let fit = check_sensor_fit(rc20, &crate::presets::cameras()[0]);
+        assert_eq!(fit.status, Status::Warn);
+        assert!(fit.verdict.contains("does not publish"));
     }
 }

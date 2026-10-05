@@ -3,6 +3,7 @@
 # Values come from vendor and dealer listings as noted in each `source`
 # field. Always confirm against the current spec sheet before a purchase.
 #
+# image_circle_mm: corrected image circle diameter, or null if the vendor does not publish one.
 # obstruction: one of `!by_diameter <fraction>`, `!by_area <fraction>`, or `none`.
 # shutter: one of `!rolling { line_time_us: <float or null> }` or `global`.
 # mount_type: one of `alt_az`, `equatorial`, `unknown`.
@@ -12,6 +13,25 @@
 # max_accel_deg_s2, settle_time_s: mount dynamics, or omit/null if not published.
 
 telescopes:
+  - name: "PlaneWave DeltaRho 280 (11\" f/2.75)"
+    aperture_mm: 280.0
+    focal_length_mm: 770.6
+    obstruction: !by_diameter 0.63
+    image_circle_mm: 55.0
+    back_focus_mm: 163.0
+    weight_lb: 32.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 4.0
+        - field_radius_mm: 21.0
+          rms_um: 4.1
+        - field_radius_mm: 27.5
+          rms_um: 4.5
+    source: "planewave.com/products/dr280-telescope (accessed 2026-10-05). The page gives the obstruction as \"63%\" without saying by diameter or by area. It is entered by diameter, as PlaneWave states for the other DeltaRho tubes: confirm with the vendor. Back focus is from the mounting surface (108 mm from the racked-in focuser)."
+
   - name: "PlaneWave DeltaRho 350 (14\" f/3)"
     aperture_mm: 350.0
     focal_length_mm: 1050.0
@@ -29,7 +49,7 @@ telescopes:
           rms_um: 6.2
         - field_radius_mm: 30.0
           rms_um: 7.6
-    source: "PlaneWave/dealer spec sheets. Back focus is from the mounting surface without focuser. Some listings quote 5.6/6.4 um off-axis instead of 6.2/7.6 um. The conservative values are used here."
+    source: "PlaneWave/dealer spec sheets. Back focus is from the mounting surface without focuser. Some listings quote 5.6/6.4 um off-axis instead of 6.2/7.6 um. The conservative values are used here. planewave.com/products/deltarho-350-ota (accessed 2026-10-05) quotes 5.6/6.4 um and 142.24 mm back focus."
 
   - name: "PlaneWave DeltaRho 500 (20\" f/3)"
     aperture_mm: 508.0
@@ -39,8 +59,54 @@ telescopes:
     back_focus_mm: 232.8
     weight_lb: 165.0
     throughput: null
-    spot: null
-    source: "PlaneWave spec sheet. No spot data entered."
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 3.86
+        - field_radius_mm: 22.0
+          rms_um: 4.04
+        - field_radius_mm: 35.0
+          rms_um: 6.04
+    source: "planewave.com/products/deltarho-500-ota (accessed 2026-10-05). Back focus is from the mounting surface (184.7 mm from the lens cell). Also sold on an L-500 as the DRL500 Telescope System."
+
+  - name: "PlaneWave FSCT8 (8\" f/2.8)"
+    aperture_mm: 203.2
+    focal_length_mm: 568.0
+    obstruction: !by_diameter 0.60
+    image_circle_mm: 42.0
+    back_focus_mm: 100.0
+    weight_lb: 20.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 3.6
+        - field_radius_mm: 16.0
+          rms_um: 6.0
+        - field_radius_mm: 21.0
+          rms_um: 6.4
+    source: "planewave.com/products/fsct8 (accessed 2026-10-05). The page gives the obstruction as \"60%\" without saying by diameter or by area. It is entered by diameter: confirm with the vendor. Back focus is from the backplate to the focal plane (70.79 mm from the racked-in focuser)."
+
+  - name: "PlaneWave CDK12.5 (12.5\" f/8)"
+    aperture_mm: 318.0
+    focal_length_mm: 2541.0
+    obstruction: !by_diameter 0.42
+    image_circle_mm: 52.0
+    back_focus_mm: 265.0
+    weight_lb: 42.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 2.8
+        - field_radius_mm: 11.0
+          rms_um: 3.8
+        - field_radius_mm: 21.0
+          rms_um: 8.0
+    source: "planewave.com/products/cdk12-5-ota (accessed 2026-10-05). Back focus is from the mounting surface (183 mm from the racked-in focuser). Also sold on an L-350 as the CDK300 Telescope System."
 
   - name: "PlaneWave CDK14 (14\" f/7.2)"
     aperture_mm: 356.0
@@ -57,18 +123,213 @@ telescopes:
           rms_um: 3.1
         - field_radius_mm: 35.0
           rms_um: 6.0
-    source: "PlaneWave CDK14 S-5 package page. That page lists both a 70 mm and a 52 mm image circle. The conservative 52 mm is used here."
+    source: "PlaneWave CDK14 S-5 package page. That page lists both a 70 mm and a 52 mm image circle. The conservative 52 mm is used here. Also sold on an L-350 as the CDK350 Telescope System."
 
   - name: "PlaneWave CDK17 (17\" f/6.8)"
     aperture_mm: 432.0
     focal_length_mm: 2939.0
-    obstruction: !by_diameter 0.49
+    obstruction: !by_diameter 0.486
     image_circle_mm: 70.0
-    back_focus_mm: 260.0
+    back_focus_mm: 262.33
+    weight_lb: 106.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 21.0
+          rms_um: 6.5
+        - field_radius_mm: 26.0
+          rms_um: 9.6
+    source: "planewave.com/products/cdk17-ota (accessed 2026-10-05): 48.6% by diameter (23.7% by area). Back focus is from the mounting surface (184 mm from the racked-in focuser). Also sold on an L-500 as the CDK400 and on an L-550 as the CDK450 Telescope System."
+
+  - name: "PlaneWave CDK20 f/6.8 (20\")"
+    aperture_mm: 508.0
+    focal_length_mm: 3454.0
+    obstruction: !by_diameter 0.39
+    image_circle_mm: 52.0
+    back_focus_mm: 224.0
+    weight_lb: 140.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 1.5
+        - field_radius_mm: 12.0
+          rms_um: 3.8
+        - field_radius_mm: 21.0
+          rms_um: 6.0
+    source: "planewave.com/products/cdk20-f6-8-ota (accessed 2026-10-05). Back focus is from the mounting surface. Also sold on an L-500 as the CDK500 and on an L-550 as the CDK550 Telescope System."
+
+  - name: "PlaneWave CDK20 f/7.7 (20\")"
+    aperture_mm: 508.0
+    focal_length_mm: 3951.0
+    obstruction: !by_diameter 0.39
+    image_circle_mm: 52.0
+    back_focus_mm: 269.24
+    weight_lb: 140.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 1.5
+        - field_radius_mm: 12.0
+          rms_um: 3.8
+        - field_radius_mm: 21.0
+          rms_um: 6.0
+    source: "planewave.com/products/cdk20-f7-7-ota (accessed 2026-10-05). The spot sizes on that page are identical to the f/6.8 version's: confirm they apply to f/7.7. The CDK500 system page quotes 3947 mm focal length instead of 3951 mm. Back focus is from the mounting surface. Also sold on an L-550 as the CDK550 f/7.77 Telescope System."
+
+  - name: "PlaneWave CDK24 (24\" f/6.5)"
+    aperture_mm: 610.0
+    focal_length_mm: 3974.0
+    obstruction: !by_diameter 0.47
+    image_circle_mm: 70.0
+    back_focus_mm: 364.46
+    weight_lb: 240.0
+    throughput: null
+    spot:
+      convention: unknown
+      points:
+        - field_radius_mm: 0.0
+          rms_um: 2.4
+        - field_radius_mm: 26.0
+          rms_um: 4.0
+        - field_radius_mm: 35.0
+          rms_um: 4.8
+    source: "planewave.com/products/cdk24-ota (accessed 2026-10-05). Back focus is from the mounting surface. Also sold on an L-600 as the CDK600 Telescope System, whose page quotes 3962 mm focal length instead of 3974 mm."
+
+  - name: "PlaneWave CDK700 (0.7 m f/6.5)"
+    aperture_mm: 700.0
+    focal_length_mm: 4540.0
+    obstruction: !by_diameter 0.47
+    image_circle_mm: 70.0
+    back_focus_mm: 309.0
     weight_lb: null
     throughput: null
     spot: null
-    source: "PlaneWave Europe spec sheet (49% by diameter = 23.7% by area). OTA weight not entered."
+    source: "planewave.com/products/cdk700 (accessed 2026-10-05). Image circle is the page's 70 mm \"optimal field of view\". Sold only as a complete system on its own alt-az mount: the page's 1,200 lb weight is the whole system, so no OTA weight is entered. Pair with the \"PlaneWave 0.7 m system mount\" preset."
+
+  - name: "PlaneWave CDK1000 (1.0 m f/6)"
+    aperture_mm: 1000.0
+    focal_length_mm: 6000.0
+    obstruction: !by_diameter 0.47
+    image_circle_mm: 100.0
+    back_focus_mm: 370.0
+    weight_lb: null
+    throughput: null
+    spot: null
+    source: "planewave.com/products/cdk1000 (accessed 2026-10-05). Image circle is the page's 100 mm \"optimal field of view\". Sold only as a complete system on its own alt-az mount: the page's 3,500 lb weight is the whole system, so no OTA weight is entered. Pair with the \"PlaneWave 1.0 m system mount\" preset."
+
+  - name: "PlaneWave PF1000 (1.0 m f/2.25 prime focus)"
+    aperture_mm: 1000.0
+    focal_length_mm: 2251.0
+    obstruction: !by_diameter 0.60
+    image_circle_mm: 115.0
+    back_focus_mm: 104.6
+    weight_lb: null
+    throughput: null
+    spot: null
+    source: "planewave.com/products/pf1000-telescope-system (accessed 2026-10-05): 60% by diameter (36% by area). Image circle is the page's 115 mm \"optimal field of view\". Sold only as a complete system on its own alt-az mount: the page's 3,950 lb weight is the whole system, so no OTA weight is entered. Pair with the \"PlaneWave 1.0 m system mount\" preset."
+
+  - name: "PlaneWave RC20 (20\" f/7)"
+    aperture_mm: 508.0
+    focal_length_mm: 3556.0
+    obstruction: !by_diameter 0.39
+    image_circle_mm: null
+    back_focus_mm: 147.0
+    weight_lb: 140.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/rc20-ota (accessed 2026-10-05). The page publishes no corrected image circle or spot sizes: ask the vendor. Back focus is from the racked-in focuser (the page gives no figure from the mounting surface)."
+
+  - name: "PlaneWave RC24 (24\" f/10.6)"
+    aperture_mm: 610.0
+    focal_length_mm: 6469.0
+    obstruction: !by_diameter 0.32
+    image_circle_mm: null
+    back_focus_mm: 394.24
+    weight_lb: 240.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/rc24-ota (accessed 2026-10-05). The page publishes no corrected image circle or spot sizes: ask the vendor. Back focus is from the mounting surface (185.4 mm from the racked-in focuser)."
+
+  - name: "PlaneWave RC700 (0.7 m f/12)"
+    aperture_mm: 700.0
+    focal_length_mm: 8410.0
+    obstruction: !by_diameter 0.30
+    image_circle_mm: null
+    back_focus_mm: 320.6
+    weight_lb: null
+    throughput: null
+    spot: null
+    source: "planewave.com/products/rc700 (accessed 2026-10-05). The page gives the obstruction as \"< 30%\" of the primary: the 30% upper bound is entered. It publishes no corrected image circle: ask the vendor. Sold only as a complete system on its own alt-az mount: the page's 2,500 lb weight is the whole system, so no OTA weight is entered. Pair with the \"PlaneWave 0.7 m system mount\" preset."
+
+  - name: "PlaneWave RC1000 (1.0 m f/12.2)"
+    aperture_mm: 1000.0
+    focal_length_mm: 12200.0
+    obstruction: !by_diameter 0.27
+    image_circle_mm: 64.0
+    back_focus_mm: 578.0
+    weight_lb: null
+    throughput: null
+    spot: null
+    source: "planewave.com/products/rc1000 (accessed 2026-10-05). Image circle is the page's 64 mm \"optimal field of view\". Sold only as a complete system on its own alt-az mount: the page's 3,650 lb weight is the whole system, so no OTA weight is entered. Pair with the \"PlaneWave 1.0 m system mount\" preset."
+
+  - name: "PlaneWave IRDK12.5 (12.5\" f/8, infrared)"
+    aperture_mm: 318.0
+    focal_length_mm: 2541.0
+    obstruction: !by_diameter 0.42
+    image_circle_mm: null
+    back_focus_mm: 265.0
+    weight_lb: 42.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/irdk12-5-ota (accessed 2026-10-05). Gold-coated mirrors with no corrector lens group listed, so the CDK12.5's image circle and spot sizes are not assumed to apply. The page publishes neither: ask the vendor. Back focus is from the mounting surface (183 mm from the racked-in focuser)."
+
+  - name: "PlaneWave IRDK14 (14\" f/7.2, infrared)"
+    aperture_mm: 356.0
+    focal_length_mm: 2563.0
+    obstruction: !by_diameter 0.485
+    image_circle_mm: null
+    back_focus_mm: 282.0
+    weight_lb: 48.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/irdk14-ota (accessed 2026-10-05). Gold-coated mirrors with no corrector lens group listed, so the CDK14's image circle and spot sizes are not assumed to apply. The page publishes neither: ask the vendor. Back focus is from the mounting surface."
+
+  - name: "PlaneWave IRDK17 (17\" f/6.8, infrared)"
+    aperture_mm: 432.0
+    focal_length_mm: 2939.0
+    obstruction: !by_diameter 0.486
+    image_circle_mm: null
+    back_focus_mm: 262.33
+    weight_lb: 106.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/irdk17-ota (accessed 2026-10-05). Gold-coated mirrors with no corrector lens group listed, so the CDK17's image circle and spot sizes are not assumed to apply. The page publishes neither: ask the vendor. Back focus is from the mounting surface (184 mm from the racked-in focuser)."
+
+  - name: "PlaneWave IRDK20 (20\" f/6.8, infrared)"
+    aperture_mm: 508.0
+    focal_length_mm: 3454.0
+    obstruction: !by_diameter 0.39
+    image_circle_mm: null
+    back_focus_mm: 224.0
+    weight_lb: 140.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/irdk20-ota (accessed 2026-10-05). Gold-coated mirrors with no corrector lens group listed, so the CDK20's image circle and spot sizes are not assumed to apply. The page publishes neither: ask the vendor. Back focus is from the mounting surface."
+
+  - name: "PlaneWave IRDK24 (24\" f/6.5, infrared)"
+    aperture_mm: 610.0
+    focal_length_mm: 3974.0
+    obstruction: !by_diameter 0.47
+    image_circle_mm: null
+    back_focus_mm: 364.46
+    weight_lb: 240.0
+    throughput: null
+    spot: null
+    source: "planewave.com/products/irdk24-ota (accessed 2026-10-05). Gold-coated mirrors with no corrector lens group listed, so the CDK24's image circle and spot sizes are not assumed to apply. The page publishes neither: ask the vendor. Back focus is from the mounting surface."
 
   - name: "Celestron RASA 11 V2 (11\" f/2.2)"
     aperture_mm: 279.0
@@ -131,7 +392,7 @@ mounts:
     settle_time_s: null
     pointing_rms_arcsec: null
     non_sidereal_tracking: null
-    source: "PlaneWave listing: 100 lb payload, 50 deg/s slew, alt-az (equatorial with wedge). Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+    source: "PlaneWave listing: 100 lb payload, 50 deg/s slew, alt-az (equatorial with wedge). Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor. planewave.com/products/l-350-telescope-mount (accessed 2026-10-05) quotes <10\" RMS pointing with a PointXP model and says the L-350 has been used to track satellites."
 
   - name: "PlaneWave L-500 (direct drive)"
     mount_type: alt_az
@@ -141,7 +402,77 @@ mounts:
     settle_time_s: null
     pointing_rms_arcsec: null
     non_sidereal_tracking: null
-    source: "PlaneWave listing: 200 lb payload, 50 deg/s slew, alt-az or equatorial. Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+    source: "PlaneWave listing: 200 lb payload, 50 deg/s slew, alt-az or equatorial. Pointing accuracy, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor. planewave.com/products/l-500-telescope-mount (accessed 2026-10-05) quotes <10\" RMS pointing with a PointXP model."
+
+  - name: "PlaneWave L-550 (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 300.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "planewave.com/products/l-550-telescope-mount (accessed 2026-10-05): 300 lb payload, 50 deg/s maximum slew (20 standard), alt-az or equatorial. Quotes <10\" RMS pointing with a PointXP model and says the L-550 has been used to track satellites. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave L-600 (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 300.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "planewave.com/products/l-600-telescope-mount (accessed 2026-10-05): 300 lb payload, 50 deg/s maximum slew (20 standard), alt-az or equatorial, 891.5 mm swing-through for 24\" tubes. Quotes <10\" RMS pointing with a PointXP model. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave T-600 (direct-drive gimbal)"
+    mount_type: alt_az
+    capacity_lb: 600.0
+    max_slew_deg_s: 100.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "planewave.com/products/t-600-gimbal (accessed 2026-10-05): 600 lb payload (with moment limits per port, e.g. dual CDK24s), velocity up to 100 deg/s and acceleration up to 100 deg/s^2, both depending on payload. The acceleration is a best-case figure, so it is not entered: ask what it is for your payload. Quotes <5\" RMS pointing with a PointXP model and markets the gimbal for satellite tracking. Pointing, TLE tracking and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave 700 Series Gimbal (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 800.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "planewave.com/products/700-series-gimbal (accessed 2026-10-05): 800 lb load capacity, slew \"> 50 deg/s\" (50 entered), tracking speeds > 10 deg/s, continuous azimuth rotation. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave 1000 Series Gimbal (direct drive)"
+    mount_type: alt_az
+    capacity_lb: 1200.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "planewave.com/products/1000-series-gimbal (accessed 2026-10-05): 1200 lb (544 kg) load capacity, slew \"> 50 deg/s\" (50 entered), tracking speeds > 10 deg/s, continuous azimuth rotation. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave 0.7 m system mount (CDK700, RC700)"
+    mount_type: alt_az
+    capacity_lb: 300.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "The integrated alt-az direct-drive mount of the CDK700 and RC700 systems (planewave.com/products/cdk700, /rc700, accessed 2026-10-05). Capacity is the 300 lb instrument payload per Nasmyth port, not the tube. Slew up to 50 deg/s. Quotes 10\" RMS pointing with a PointXP model; the CDK700 page says it can track satellites. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
+
+  - name: "PlaneWave 1.0 m system mount (CDK1000, RC1000, PF1000)"
+    mount_type: alt_az
+    capacity_lb: 300.0
+    max_slew_deg_s: 50.0
+    max_accel_deg_s2: null
+    settle_time_s: null
+    pointing_rms_arcsec: null
+    non_sidereal_tracking: null
+    source: "The integrated alt-az direct-drive mount of the CDK1000, RC1000 and PF1000 systems (planewave.com/products/cdk1000, /rc1000, /pf1000-telescope-system, accessed 2026-10-05). Capacity is the 300 lb instrument payload on the field de-rotator, not the tube; the PF1000 page also says its prime-focus rotator takes up to 100 lb. Slew up to 50 deg/s. Quotes better than 10\" RMS pointing with a PointXP model; the CDK1000 page says it can track satellites. Pointing, TLE tracking, axis acceleration and settle time not entered: confirm with the vendor."
 
   - name: "iOptron HAE69C-EC (strain-wave)"
     mount_type: equatorial

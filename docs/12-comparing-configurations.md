@@ -13,7 +13,7 @@ Configuration                  "/px   px/*  bin FOVdeg2 Area m2   dMag Search CF
 DeltaRho 350 + IMX455          0.74    3.4  2x2    2.58  0.0660  +0.00  1.00x   12.1     58
 RASA 11 + IMX455               1.25    2.0  1x1    7.39  0.0509  -0.28  2.21x    6.6     72
 CDK14 + IMX455                 0.30    8.3  4x4    0.43  0.0761  +0.15  0.19x   69.6     60
-CDK17 + IMX455                 0.26    9.5  4x4    0.33  0.1114  +0.57  0.22x   62.1      -
+CDK17 + IMX455                 0.26    9.5  4x4    0.33  0.1120  +0.57  0.22x   62.1     62
 DeltaRho 500 + IMX461          0.50    5.0  3x3    2.01  0.1321  +0.75  1.56x   12.3     90
 RASA 11 + IMX174 (global)      1.95    1.3  1x1    0.69  0.0509  -0.28  0.21x    6.6     48
 
@@ -22,8 +22,8 @@ RASA 11 + IMX174 (global)      1.95    1.3  1x1    0.69  0.0509  -0.28  0.21x   
 DeltaRho 350 + IMX455         P P P W i i W P
 RASA 11 + IMX455              P P P i i i W W
 CDK14 + IMX455                P F W P i i P P
-CDK17 + IMX455                P F W i i i P i
-DeltaRho 500 + IMX461         P W W i i i W W
+CDK17 + IMX455                P F W P i i P P
+DeltaRho 500 + IMX461         P W W P i i W W
 RASA 11 + IMX174 (global)     P W W i i i W P
 
  Orbital regimes, telescope/camera/mount/system (P=pass W=warn F=fail i=info):

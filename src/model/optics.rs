@@ -84,8 +84,9 @@ pub struct Telescope {
     /// Effective focal length, mm.
     pub focal_length_mm: f64,
     pub obstruction: Obstruction,
-    /// Diameter of the corrected (sharp, flat) image circle, mm.
-    pub image_circle_mm: f64,
+    /// Diameter of the corrected (sharp, flat) image circle, mm. `None` means
+    /// the vendor does not publish one.
+    pub image_circle_mm: Option<f64>,
     /// Back focus available, mm (how the vendor measures it varies, see docs/06-light-field-focus-fit-checks.md).
     pub back_focus_mm: Option<f64>,
     /// Optical tube weight, lb.
