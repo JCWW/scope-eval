@@ -12,8 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 
 [workspace]
-members = [".", "crates/orbit-prop"]
-default-members = [".", "crates/orbit-prop"]
+members = [".", "crates/orbit-prop", "crates/scope-sim", "crates/scope-sim-wasm"]
+default-members = [".", "crates/orbit-prop", "crates/scope-sim"]
 
 [profile.release]
 opt-level = 3
