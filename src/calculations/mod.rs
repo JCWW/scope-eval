@@ -8,4 +8,5 @@ pub mod camera;
 pub mod detection;
 pub mod mount;
 pub mod optics;
+pub mod psf;
 pub mod orbit;

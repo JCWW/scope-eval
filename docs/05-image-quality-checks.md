@@ -47,12 +47,14 @@ plate scale ("/px) = 206.265 x pixel_um / FL_mm
 
 The constant is 206.265 instead of 206,265 because it absorbs the factor of 1000 from mixing micrometers and millimeters.
 
-**Step 2: pixels across a star.** The atmosphere blurs each star to the seeing FWHM. Divide by the plate scale to get that blur in pixels:
+**Step 2: pixels across a star.** The atmosphere blurs each star to the seeing FWHM, and that is most of a star's size. Diffraction, the optics and the detector add a little more. The tool combines all of them into the star's FWHM, the system point spread function (see [page 17](17-point-spread-function.md)). Divide by the plate scale to get that size in pixels:
 
 ```
-pixels across a star = seeing FWHM (") / plate scale
+pixels across a star = star FWHM (") / plate scale
 footprint (pixels)   ~ (pixels across)^2
 ```
+
+With the seeing alone as the star FWHM, this is a good first estimate by hand.
 
 **Step 3: compare with the target of about 2.** Finer pixels can't record detail the atmosphere has already erased, so there is a sweet spot:
 
@@ -61,7 +63,7 @@ footprint (pixels)   ~ (pixels across)^2
 
 About 2 pixels across the FWHM is the standard compromise.
 
-**Worked example.**
+**Worked example.** First with the seeing alone:
 
 ```
 plate scale         = 206.265 x 3.76 / 1050 = 0.739 "/px
@@ -69,7 +71,15 @@ pixels across star  = 2.5 / 0.739           = 3.38
 footprint           ~ 3.38^2                = ~11 pixels
 ```
 
-That's mildly oversampled. Binning 2x2 gives 1.48 "/px and 1.69 pixels across, which is right on target.
+That would be mildly oversampled. Now the system PSF the tool uses. Diffraction adds 0.33", and the DeltaRho's 4.9 um RMS spot, read as an RMS radius, adds 1.60":
+
+```
+star FWHM           = sqrt(2.5^2 + 0.33^2 + 1.60^2) = 2.99"
+pixels across star  = 2.99 / 0.739                  = 4.05
+footprint           ~ 4.05^2                        = ~16 pixels
+```
+
+At 4.05 the star is just past the 4.0 line, so the check gives WARN (oversampled). Binning 2x2 gives 1.48 "/px and 2.02 pixels across, right on target. The spec sheet doesn't say whether 4.9 um is a radius or a diameter. Read as a diameter, the star is 2.65" and 3.58 pixels across, a PASS. The tool shows both readings, the same way check 4 does.
 
 **Recommended bin.** The tool tries square bins from 1x1 to 4x4 and picks the one that brings pixels-across closest to 2.
 
@@ -118,23 +128,25 @@ The sky caveat: sky brightness per square arcsecond is fixed by the site, so bin
 
 **Question.** What pixel size does this telescope want, and does this camera provide it, natively or after binning?
 
-**Step 1: turn the plate-scale formula around.** Set the plate scale to half the seeing (2 pixels across a star) and solve for pixel size:
+**Step 1: turn the plate-scale formula around.** Set the plate scale to half the star FWHM from check 2 (2 pixels across a star) and solve for pixel size:
 
 ```
-ideal pixel (um) = (seeing / 2) x FL_mm / 206.265
+ideal pixel (um) = (star FWHM / 2) x FL_mm / 206.265
 ```
 
 Instead of asking "is this camera OK on this telescope?" this tells you what camera the telescope is asking for, which makes it a fast filter when comparing scopes.
 
 **Step 2: find the best bin.** The tool finds the bin factor b (1 to 4) whose effective pixel (b x pixel) is closest to ideal on a ratio scale, then computes the match ratio m = effective / ideal. "Ratio scale" means 0.5x and 2x count as equally far from 1x.
 
-**Worked examples at 2.5" seeing.**
+**Worked examples at 2.5" seeing.** The star FWHM is the system PSF from check 2. The RASA has no spot data, so only diffraction is added to its seeing.
 
-| Telescope | Focal length | Ideal pixel | IMX455 (3.76 um) match |
-|---|---|---|---|
-| Celestron RASA 11 | 620 mm | 3.8 um | Natural match |
-| PlaneWave DeltaRho 350 | 1050 mm | 6.4 um | Good after 2x2 (7.5 um) |
-| PlaneWave CDK17 | 2939 mm | 17.8 um | Needs 4x4, read-noise penalty |
+| Telescope | Focal length | Star FWHM | Ideal pixel | IMX455 (3.76 um) match |
+|---|---|---|---|---|
+| Celestron RASA 11 | 620 mm | 2.53" | 3.8 um | Natural match |
+| PlaneWave DeltaRho 350 | 1050 mm | 2.99" | 7.6 um | Good after 2x2 (7.5 um) |
+| PlaneWave CDK17 | 2939 mm | 2.63" | 18.7 um | Needs 4x4, read-noise penalty |
+
+With the seeing alone, the three ideal pixels would be 3.8, 6.4 and 17.8 um.
 
 **Thresholds.** PASS if 0.75 <= m <= 1.33 with no binning or 2x2. WARN if a match needs 3x3 or 4x4 binning (CMOS read-noise penalty), or if no bin gets within range.
 
@@ -189,9 +201,9 @@ The readings disagree, so the result is WARN: ask the vendor which convention th
 
 1. **RASA 11 sensor fit.** The RASA 11's image circle is 43.3 mm. Is the IMX455 (36.0 x 24.0 mm) inside it?
    *Answer:* the diagonal is 43.28 mm, so it passes by about 0.02 mm. The tool reports PASS, but a sensor even slightly larger would not fit.
-2. **RASA 11 sampling.** Plate scale = 206.265 x 3.76 / 620 = **1.251 "/px**. Pixels across = 2.5 / 1.251 = **2.0**, which is well sampled at 1x1.
-3. **CDK14 sampling.** Plate scale = 206.265 x 3.76 / 2563 = **0.303 "/px**. Pixels across = 2.5 / 0.303 = **8.3**, above 6.0, so FAIL (heavily oversampled).
-4. **DeltaRho ideal pixel.** (2.5 / 2) x 1050 / 206.265 = **6.36 um**. The 2x2-binned IMX455 gives 7.52 um, a match ratio of 7.52 / 6.36 = 1.18, inside 0.75 to 1.33, so PASS.
+2. **RASA 11 sampling.** Plate scale = 206.265 x 3.76 / 620 = **1.251 "/px**. Pixels across = 2.5 / 1.251 = **2.0** with the seeing alone, which is well sampled at 1x1. The tool's star is 2.53" (diffraction adds 0.42"), so it reports 2.03.
+3. **CDK14 sampling.** Plate scale = 206.265 x 3.76 / 2563 = **0.303 "/px**. Pixels across = 2.5 / 0.303 = **8.3** with the seeing alone, above 6.0, so FAIL (heavily oversampled). The tool's system-PSF star is 2.56", or 8.44 pixels across.
+4. **DeltaRho ideal pixel.** (2.99 / 2) x 1050 / 206.265 = **7.61 um**. The 2x2-binned IMX455 gives 7.52 um, a match ratio of 7.52 / 7.61 = 0.99, inside 0.75 to 1.33, so PASS. With the seeing alone the ideal would be 6.36 um and the ratio 1.18, still a PASS.
 5. **CDK14 optics vs seeing.** The CDK14 quotes 3.1 um RMS at 13 mm and 6.0 um at 35 mm off-axis. The IMX455 corner is 21.6 mm off-axis.
    * Corner spot by interpolation: 3.1 + (21.6 - 13) / (35 - 13) x (6.0 - 3.1) = **4.2 um**.
    * Seeing blur: 2.5 x 2563 / 206.265 = **31.1 um**.
@@ -208,7 +220,8 @@ The readings disagree, so the result is WARN: ask the vendor which convention th
 | Ideal pixel and ratio-scale matching | `cargo test ideal_pixel_values` and `cargo test closest_binned_pixel` |
 | Blurs in quadrature | `cargo test blur_growth` |
 | Spot interpolation | `cargo test spot_interpolation` |
+| The system-PSF star used by checks 2 and 3 | `cargo test running_example_budget` |
 
-**In the tool.** Run `cargo run --release -- --demo`. In the comparison table, the `"/px` and `px/*` columns should show 0.74 and 3.4 for DeltaRho 350 + IMX455, 1.25 and 2.0 for the RASA 11, and 0.30 and 8.3 for the CDK14. In the status-by-check grid, check 2 should be `P` for the first two and `F` for the CDK14, and check 4 should be `W` for the DeltaRho 350.
+**In the tool.** Run `cargo run --release -- --demo`. In the comparison table, the `"/px` and `px/*` columns should show 0.74 and 4.0 for DeltaRho 350 + IMX455, 1.25 and 2.0 for the RASA 11, and 0.30 and 8.4 for the CDK14. In the status-by-check grid, check 2 should be `W` for the DeltaRho 350, `P` for the RASA 11 and `F` for the CDK14, and check 4 should be `W` for the DeltaRho 350. In the DeltaRho's check 2 details, the "If the spot figure is an RMS diameter" line should read 3.58 px.
 
 Next: [Light, field, focus and fit checks](06-light-field-focus-fit-checks.md).

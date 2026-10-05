@@ -45,6 +45,6 @@ Output is plain ASCII (for example `um` for micrometers and `"` for arcseconds) 
 
 1. Run `cargo test`. Every test should pass. Many of those tests are the worked examples in these docs, so a passing run means the formulas in the code still produce the numbers printed here.
 2. Run `cargo run --release -- --demo` and find the line for **DeltaRho 350 + IMX455** in the comparison table near the end. It should read a plate scale of `0.74`, a recommended bin of `2x2` and a field of `2.58` square degrees. Pages 5 and 6 derive each of those by hand.
-3. Run the interactive menu, evaluate the DeltaRho 350 with the IMX455, and change only the seeing (menu: **Change site conditions**) from 2.5 to 1.5. The sampling check (check 2) should drop from about 3.4 to about 2.0 pixels across a star, and the recommended bin should change from 2x2 to 1x1. [Page 5](05-image-quality-checks.md) explains why.
+3. Run the interactive menu, evaluate the DeltaRho 350 with the IMX455, and change only the seeing (menu: **Change site conditions**) from 2.5 to 1.5. The sampling check (check 2) should drop from about 4.0 to about 3.0 pixels across a star and move from WARN to PASS. It doesn't fall in proportion to the seeing, because the telescope's own blur stays the same while the seeing shrinks. [Page 5](05-image-quality-checks.md) and [page 17](17-point-spread-function.md) explain why.
 
 Next: [Key terms](02-key-terms.md).

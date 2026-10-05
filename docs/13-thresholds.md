@@ -73,4 +73,4 @@ The regime parameters themselves (ranges, rates, prediction errors) are not thre
 ## Check it yourself
 
 1. Open `src/constants.rs` and confirm each default above matches the file.
-2. Change `SAMPLING_OVER_FAIL` from 6.0 to 10.0, rebuild and rerun `--demo`. The CDK14 (8.3 px across) and CDK17 (9.5 px across) should move from `F` to `W` on check 2. Run `cargo test` too: the calculator tests should still pass, because only a judgment changed. Revert the change afterwards.
+2. Change `SAMPLING_OVER_FAIL` from 6.0 to 10.0, rebuild and rerun `--demo`. The CDK14 (8.4 px across) and CDK17 (9.95 px across) should move from `F` to `W` on check 2. Run `cargo test` too: the calculator tests should still pass, because only a judgment changed. Revert the change afterwards.

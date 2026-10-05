@@ -8,7 +8,7 @@
 //!
 //! * `model`, `constants`, `presets`: data types, limits and preset hardware
 //! * `calculations`: the physics, as pure functions
-//! * `checks`, `regimes`, `photometry`, `passes`: evaluation, applying the
+//! * `checks`, `regimes`, `photometry`, `psf`, `passes`: evaluation, applying the
 //!   PASS/WARN/FAIL rules to the physics
 //! * `report`: turning evaluations into text
 
@@ -19,5 +19,6 @@ pub mod model;
 pub mod passes;
 pub mod photometry;
 pub mod presets;
+pub mod psf;
 pub mod regimes;
 pub mod report;

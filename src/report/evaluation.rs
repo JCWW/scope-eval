@@ -3,11 +3,12 @@
 use std::fmt;
 
 use super::{word, RULE};
-use crate::checks::{Evaluation, Status};
+use crate::checks::{kv, Evaluation, Status};
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::DEFAULT_SKY_MAG_ARCSEC2;
 use crate::model::plausible;
 use crate::model::{Config, Shutter, Site};
+use crate::psf::{FieldPoint, PsfBudget};
 use crate::regimes::Component;
 
 /// The full report for one configuration: the eight checks, the GEO timing
@@ -53,6 +54,8 @@ impl fmt::Display for EvaluationReport<'_> {
             writeln!(f, "       -> {}", chk.verdict)?;
         }
 
+        write!(f, "{}", PsfReport(&ev.psf))?;
+
         if let Some(m) = &cfg.payload.mount {
             writeln!(f, "\n Mount:     {}", m.name)?;
         }
@@ -73,6 +76,59 @@ impl fmt::Display for EvaluationReport<'_> {
             count(Status::Fail),
             count(Status::Info)
         )?;
+        Ok(())
+    }
+}
+
+/// The point spread function budget: each blur term at the sensor centre
+/// and corner, and what the combined star looks like on the pixels.
+pub struct PsfReport<'a>(pub &'a PsfBudget);
+
+impl fmt::Display for PsfReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let PsfReport(b) = *self;
+        let both = |center: f64, corner: f64| format!("{center:.2}\" / {corner:.2}\"");
+        let flat = |v: f64| both(v, v);
+        let line = |f: &mut fmt::Formatter<'_>, label: &str, value: String| writeln!(f, "       {}", kv(label, value));
+
+        writeln!(f, "\n[----] Point spread function budget, FWHM (not scored)")?;
+        line(f, "Field point", format!("center / corner (r = {:.1} mm)", b.corner_radius_mm))?;
+        line(f, "Seeing", flat(b.seeing_arcsec))?;
+        line(f, "Diffraction (1.03 x wavelength / D)", flat(b.diffraction_arcsec))?;
+        match (b.optics_arcsec, b.spot_reading) {
+            (Some((center, corner)), Some(reading)) => {
+                let extrapolated = if b.optics_extrapolated { "  (corner extrapolated)" } else { "" };
+                line(f, &format!("Optics (spot read as {reading})"), format!("{}{extrapolated}", both(center, corner)))?;
+            }
+            _ => line(f, "Optics", "no spot data: left out".to_string())?,
+        }
+        match b.diffusion_arcsec {
+            Some(d) => line(f, "Detector diffusion (from MTF)", flat(d))?,
+            None => line(f, "Detector diffusion", "no MTF entered: left out".to_string())?,
+        }
+        let px = |arcsec: f64| arcsec / b.plate_scale;
+        let (s0, s1) = (b.sampled_fwhm(FieldPoint::Center), b.sampled_fwhm(FieldPoint::Corner));
+        line(f, "Image the pixels sample", format!("{}  ({:.2} / {:.2} px)", both(s0, s1), px(s0), px(s1)))?;
+        line(f, "Pixel aperture (0.68 x pixel)", flat(b.pixel_arcsec))?;
+        let (r0, r1) = (b.recorded_fwhm(FieldPoint::Center), b.recorded_fwhm(FieldPoint::Corner));
+        line(f, "Recorded star", format!("{}  ({:.2} / {:.2} px)", both(r0, r1), px(r0), px(r1)))?;
+        line(
+            f,
+            "Light in the brightest pixel (center)",
+            format!(
+                "{:.1}% centred on a pixel, {:.1}% on a pixel corner",
+                b.peak_pixel_fraction(FieldPoint::Center, true) * 100.0,
+                b.peak_pixel_fraction(FieldPoint::Center, false) * 100.0
+            ),
+        )?;
+        line(
+            f,
+            "Largest term",
+            format!("{} / {}", b.largest_term(FieldPoint::Center), b.largest_term(FieldPoint::Corner)),
+        )?;
+        if !b.assumed.is_empty() {
+            line(f, "Assumed or missing", b.assumed.join(", "))?;
+        }
         Ok(())
     }
 }

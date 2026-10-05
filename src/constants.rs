@@ -17,6 +17,19 @@ pub const DEG_PER_RADIAN: f64 = 180.0 / PI;
 pub const SIDEREAL_RATE_ARCSEC_PER_S: f64 = 1_296_000.0 / 86_164.0905;
 /// For a round Gaussian blur, FWHM = 2*sqrt(ln 2) * (RMS radius) = 1.665 * RMS radius.
 pub const FWHM_PER_RMS_RADIUS: f64 = 1.665_109;
+/// For a Gaussian profile, FWHM = 2*sqrt(2 ln 2) * sigma = 2.355 * sigma.
+pub const FWHM_PER_SIGMA: f64 = 2.354_820;
+/// FWHM of the Airy core of an unobstructed circular aperture, in units of
+/// wavelength / aperture. A central obstruction narrows the core slightly and
+/// moves light into the rings; see docs/17-point-spread-function.md.
+pub const AIRY_FWHM_PER_LAMBDA_OVER_D: f64 = 1.029;
+/// RMS width of a square pixel's response, as a fraction of the pixel pitch:
+/// a uniform box of width p has standard deviation p / sqrt(12).
+pub const PIXEL_BOX_SIGMA_PER_PITCH: f64 = 0.288_675;
+/// MTF of an ideal square pixel at the Nyquist frequency: sinc(1/2) = 2 / pi.
+/// A measured detector MTF at Nyquist below this means charge diffusion or
+/// crosstalk blurs the image further.
+pub const PIXEL_BOX_MTF_AT_NYQUIST: f64 = 2.0 / PI;
 /// Earth's gravitational parameter (km^3/s^2) and equatorial radius (km),
 /// shared with the `orbit-prop` library so the two can never disagree.
 pub use orbit_prop::constants::{EARTH_RADIUS_KM, MU_EARTH};
@@ -44,6 +57,8 @@ pub const PHOTONS_M2_S_MAG0: f64 = 8.9e9;
 
 /// Arcseconds in one degree.
 pub const ARCSEC_PER_DEGREE: f64 = 3600.0;
+/// Milliarcseconds in one arcsecond.
+pub const MAS_PER_ARCSEC: f64 = 1000.0;
 /// Arcminutes in one degree.
 pub const ARCMIN_PER_DEGREE: f64 = 60.0;
 /// Micrometers in one millimeter.
@@ -198,6 +213,9 @@ pub mod plausible_ranges {
     /// Read noise, electrons RMS.
     pub const READ_NOISE_MIN: f64 = 0.1;
     pub const READ_NOISE_MAX: f64 = 100.0;
+    /// Detector MTF at Nyquist, a fraction of 1.
+    pub const MTF_NYQUIST_MIN: f64 = 0.01;
+    pub const MTF_NYQUIST_MAX: f64 = 1.0;
     /// Mount axis acceleration, deg/s^2.
     pub const ACCEL_MIN_DEG_S2: f64 = 1e-4;
     pub const ACCEL_MAX_DEG_S2: f64 = 1000.0;

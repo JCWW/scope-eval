@@ -19,8 +19,8 @@ impl OpticsCalculator {
     }
 
     /// Number of pixels spanning a star's FWHM.
-    pub fn pixels_across_star(seeing_arcsec: f64, plate_scale: f64) -> f64 {
-        seeing_arcsec / plate_scale
+    pub fn pixels_across_star(fwhm_arcsec: f64, plate_scale: f64) -> f64 {
+        fwhm_arcsec / plate_scale
     }
 
     /// Square bin factor (1..=MAX_BIN) that brings sampling closest to target.
@@ -57,13 +57,19 @@ impl OpticsCalculator {
     }
 
     /// Pixel size (um) that gives the target number of pixels across a star.
-    pub fn ideal_pixel_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
-        (seeing_arcsec / limits::SAMPLING_TARGET) / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
+    pub fn ideal_pixel_um(fwhm_arcsec: f64, focal_length_mm: f64) -> f64 {
+        (fwhm_arcsec / limits::SAMPLING_TARGET) / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
     }
 
     /// Physical size of the seeing blur on the focal plane, um.
     pub fn seeing_blur_um(seeing_arcsec: f64, focal_length_mm: f64) -> f64 {
         seeing_arcsec / ARCSEC_PER_RADIAN * focal_length_mm * UM_PER_MM
+    }
+
+    /// Sky angle of a size on the focal plane, arcsec: the inverse of
+    /// `seeing_blur_um`.
+    pub fn focal_plane_to_sky_arcsec(size_um: f64, focal_length_mm: f64) -> f64 {
+        size_um / UM_PER_MM / focal_length_mm * ARCSEC_PER_RADIAN
     }
 
     /// Convert a quoted RMS spot figure to approximate FWHM for a Gaussian blur.

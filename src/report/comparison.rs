@@ -24,8 +24,8 @@ impl fmt::Display for ComparisonReport<'_> {
         writeln!(f, " Comparison (reference = first configuration: {})", reference.label)?;
         writeln!(f, "{RULE}")?;
         writeln!(f,
-            "{:<28} {:>6} {:>6} {:>4} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6}",
-            "Configuration", "\"/px", "px/*", "bin", "FOVdeg2", "Area m2", "dMag", "Search", "CFZ+/-", "Load%"
+            "{:<28} {:>6} {:>6} {:>6} {:>4} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6}",
+            "Configuration", "\"/px", "FWHM\"", "px/*", "bin", "FOVdeg2", "Area m2", "dMag", "Search", "CFZ+/-", "Load%"
         )?;
         for e in evals {
             let m = &e.metrics;
@@ -36,9 +36,10 @@ impl fmt::Display for ComparisonReport<'_> {
                 .map(|f| format!("{:.0}", f * 100.0))
                 .unwrap_or_else(|| "-".to_string());
             writeln!(f,
-                "{:<28} {:>6.2} {:>6.1} {:>4} {:>7.2} {:>7.4} {:>+6.2} {:>5.2}x {:>6.1} {:>6}",
+                "{:<28} {:>6.2} {:>6.2} {:>6.1} {:>4} {:>7.2} {:>7.4} {:>+6.2} {:>5.2}x {:>6.1} {:>6}",
                 truncate(&e.label, 28),
                 m.plate_scale,
+                m.star_fwhm_arcsec,
                 m.pixels_across,
                 format!("{}x{}", m.recommended_bin, m.recommended_bin),
                 m.fov_area_deg2,
@@ -49,7 +50,8 @@ impl fmt::Display for ComparisonReport<'_> {
                 load
             )?;
         }
-        writeln!(f, "\n Columns: plate scale, pixels across a star (native), best bin, field area,")?;
+        writeln!(f, "\n Columns: plate scale, recorded star FWHM (system PSF, center), pixels across")?;
+        writeln!(f, " the sampled star (native), best bin, field area,")?;
         writeln!(f, " effective collecting area, depth vs reference (+ is fainter), search speed")?;
         writeln!(f, " (etendue) vs reference, critical focus zone in um, payload as % of mount rating.")?;
 

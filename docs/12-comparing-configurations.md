@@ -9,17 +9,17 @@
 Choose **Compare all evaluated configurations**, or run `--demo`. Example from the demo at 2.5" seeing, with GPS timestamps (0.1 ms) and 30" mount pointing assumed:
 
 ```
-Configuration                  "/px   px/*  bin FOVdeg2 Area m2   dMag Search CFZ+/-  Load%
-DeltaRho 350 + IMX455          0.74    3.4  2x2    2.58  0.0660  +0.00  1.00x   12.1     58
-RASA 11 + IMX455               1.25    2.0  1x1    7.39  0.0509  -0.28  2.21x    6.6     72
-CDK14 + IMX455                 0.30    8.3  4x4    0.43  0.0761  +0.15  0.19x   69.6     60
-CDK17 + IMX455                 0.26    9.5  4x4    0.33  0.1120  +0.57  0.22x   62.1     62
-DeltaRho 500 + IMX461          0.50    5.0  3x3    2.01  0.1321  +0.75  1.56x   12.3     90
-RASA 11 + IMX174 (global)      1.95    1.3  1x1    0.69  0.0509  -0.28  0.21x    6.6     48
+Configuration                  "/px  FWHM"   px/*  bin FOVdeg2 Area m2   dMag Search CFZ+/-  Load%
+DeltaRho 350 + IMX455          0.74   3.03    4.0  2x2    2.58  0.0660  +0.00  1.00x   12.1     58
+RASA 11 + IMX455               1.25   2.67    2.0  1x1    7.39  0.0509  -0.28  2.21x    6.6     72
+CDK14 + IMX455                 0.30   2.56    8.4  4x4    0.43  0.0761  +0.15  0.19x   69.6     60
+CDK17 + IMX455                 0.26   2.63   10.0  4x4    0.33  0.1120  +0.57  0.22x   62.1     62
+DeltaRho 500 + IMX461          0.50   2.68    5.3  3x3    2.01  0.1321  +0.75  1.56x   12.3     90
+RASA 11 + IMX174 (global)      1.95   2.86    1.3  1x1    0.69  0.0509  -0.28  0.21x    6.6     48
 
  Status by check (P=pass W=warn F=fail i=info):
                               1 2 3 4 5 6 7 8
-DeltaRho 350 + IMX455         P P P W i i W P
+DeltaRho 350 + IMX455         P W P W i i W P
 RASA 11 + IMX455              P P P i i i W W
 CDK14 + IMX455                P F W P i i P P
 CDK17 + IMX455                P F W P i i P P
@@ -41,7 +41,8 @@ RASA 11 + IMX174 (global)     W/P/W/W   P/P/W/W   P/P/P/W   P/P/W/W   P/P/P/W
 | Column | Meaning | Derived on |
 |---|---|---|
 | "/px | Native plate scale | [Check 2](05-image-quality-checks.md#check-2-sampling-plate-scale-vs-seeing) |
-| px/* | Pixels across a star at native resolution | [Check 2](05-image-quality-checks.md#check-2-sampling-plate-scale-vs-seeing) |
+| FWHM" | Recorded star FWHM at the sensor centre (system PSF) | [Page 17](17-point-spread-function.md#three-sizes-of-the-same-star) |
+| px/* | Pixels across the sampled star at native resolution | [Check 2](05-image-quality-checks.md#check-2-sampling-plate-scale-vs-seeing) |
 | bin | Recommended square bin | [Check 2](05-image-quality-checks.md#check-2-sampling-plate-scale-vs-seeing) |
 | FOVdeg2 | Field area in square degrees | [Check 6](06-light-field-focus-fit-checks.md#check-6-field-of-view-and-search-speed) |
 | Area m2 | Effective collecting area | [Check 5](06-light-field-focus-fit-checks.md#check-5-collecting-area-and-depth) |

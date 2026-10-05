@@ -243,33 +243,44 @@ mod tests {
         assert!(a < b && b < c);
     }
 
+    /// The running example's recorded star at 2.5" seeing: the system PSF
+    /// (seeing, diffraction, optics and pixel aperture), arcsec FWHM. The
+    /// detection check sizes its footprint and exposure on this, not on the
+    /// seeing alone. See docs/17-point-spread-function.md.
+    const STAR: f64 = 3.0302;
+
     #[test]
     fn geo_snr_deltarho350() {
-        // 30 s on a 11.59-mag target: 276,671 e- of signal against 298 e- of
-        // sky over an 11.46 px footprint and a 103 e- read term.
+        // 30 s on a 11.59-mag target: 276,885 e- of signal against 438 e- of
+        // sky over a 16.83 px footprint and a 151 e- read term.
         let signal = signal_e_per_s(11.5914, AREA, QE, THRU) * 30.0;
-        let n_px = footprint_px(2.5, 0.0, SCALE);
+        let n_px = footprint_px(STAR, 0.0, SCALE);
+        assert!(close(n_px, 16.83, 0.01));
         let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * 30.0 * n_px;
         assert!(close(snr(signal, sky, 3.0, n_px), 525.6, 1.0));
     }
 
     #[test]
     fn cislunar_snr_deltarho350() {
-        let t = trail_limited_exposure_s(2.5, LUNAR_RATE);
-        let n_px = footprint_px(2.5, trail_arcsec(LUNAR_RATE, t), SCALE);
+        // Trail-limited to one star FWHM: 3.0302 / 0.5490 = 5.519 s, and a
+        // 3.03" x 6.06" footprint of 33.66 px.
+        let t = trail_limited_exposure_s(STAR, LUNAR_RATE);
+        assert!(close(t, 5.519, 0.001));
+        let n_px = footprint_px(STAR, trail_arcsec(LUNAR_RATE, t), SCALE);
+        assert!(close(n_px, 33.66, 0.01));
         let signal = signal_e_per_s(16.6739, AREA, QE, THRU) * t;
         let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
-        assert!(close(snr(signal, sky, 3.0, n_px), 14.86, 0.05));
+        assert!(close(snr(signal, sky, 3.0, n_px), 15.42, 0.05));
     }
 
     #[test]
     fn cislunar_limiting_mag() {
-        let t = trail_limited_exposure_s(2.5, LUNAR_RATE);
-        let n_px = footprint_px(2.5, trail_arcsec(LUNAR_RATE, t), SCALE);
+        let t = trail_limited_exposure_s(STAR, LUNAR_RATE);
+        let n_px = footprint_px(STAR, trail_arcsec(LUNAR_RATE, t), SCALE);
         let sky = sky_e_per_px_s(21.0, SCALE, AREA, QE, THRU) * t * n_px;
         let noise = sky + 9.0 * n_px;
         let k = signal_coefficient(AREA, QE, THRU, t);
-        assert!(close(limiting_mag(5.0, noise, k), 18.155, 0.01));
+        assert!(close(limiting_mag(5.0, noise, k), 18.152, 0.01));
     }
 
     #[test]
@@ -356,6 +367,7 @@ mod tests {
             height_px: 6388,
             read_noise_e: None,
             qe: None,
+            mtf_nyquist: None,
             shutter: Shutter::Global,
             weight_lb: None,
             source: "test".into(),

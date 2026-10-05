@@ -93,25 +93,25 @@ sky (e-/px/s) = 8.9e9 x 10^(-0.4 x sky_mag) x effective area x QE x throughput x
 
 **What trails depends on tracking mode** (Lesson 6). If the mount holds the target still (rate track or stare), the target doesn't trail, and only the 30 s cap limits the exposure. If the mount tracks the stars (cislunar), the target drifts at its rate against the stars.
 
-**Trail-limited exposure.** Keep the target's trail within one seeing disk:
+**Trail-limited exposure.** Keep the target's trail within one star width. The star is the recorded star from Lesson 2, section 2.7: the seeing plus diffraction, optics, detector diffusion and the pixel's own shape, added in quadrature. For the running example it is **3.03"**, not the 2.5" seeing.
 
 ```
-exposure        = seeing / residual rate        (capped at 30 s)
+exposure        = star / residual rate        (capped at 30 s)
 trail           = residual rate x exposure
-footprint (px)  = (seeing / scale) x ((seeing + trail) / scale)
+footprint (px)  = (star / scale) x ((star + trail) / scale)
 ```
 
-The footprint is a seeing disk stretched along the trail: one seeing width across, seeing plus trail along. Note that the detection model uses the **native** plate scale, not the binned one, because read noise is paid per native pixel on CMOS (Lesson 2).
+The footprint is a star image stretched along the trail: one star width across, star plus trail along. Note that the detection model uses the **native** plate scale, not the binned one, because read noise is paid per native pixel on CMOS (Lesson 2).
 
-**Worked example (cislunar, 2.5" seeing).**
+**Worked example (cislunar, 2.5" seeing, 3.03" star).**
 
 ```
-exposure  = 2.5 / 0.549 = 4.554 s
-trail     = 0.549 x 4.554 = 2.5"            (one seeing disk, by construction)
-footprint = (2.5 / 0.7386) x (5.0 / 0.7386) = 22.9 px
+exposure  = 3.03 / 0.549 = 5.519 s
+trail     = 0.549 x 5.519 = 3.03"           (one star width, by construction)
+footprint = (3.03 / 0.7386) x (6.06 / 0.7386) = 33.7 px
 ```
 
-For the stationary regimes: exposure 30 s, trail 0, footprint (2.5 / 0.7386)^2 = 11.5 px.
+For the stationary regimes: exposure 30 s, trail 0, footprint (3.03 / 0.7386)^2 = 16.8 px. With the seeing alone as the star, these would be 4.554 s, 22.9 px and 11.5 px: the bigger star costs some sky and read noise.
 
 ## 9.4 Signal-to-noise
 
@@ -157,26 +157,28 @@ For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21
 
 | Regime | Mode | Exposure | Target mag | SNR | Limiting mag | Margin | Verdict |
 |---|---|---|---|---|---|---|---|
-| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 20.06 | +17.8 | trivial |
-| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 20.06 | +9.8 | trivial |
-| GEO | stare | 30 s (capped) | 11.59 | 526 | 20.06 | +8.5 | trivial |
-| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 20.06 | +8.3 | trivial |
-| Cislunar | sidereal | 4.554 s (trail-limited) | 16.67 | 14.9 | 18.15 | +1.5 | graded |
+| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 19.87 | +17.6 | trivial |
+| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 19.87 | +9.6 | trivial |
+| GEO | stare | 30 s (capped) | 11.59 | 526 | 19.87 | +8.3 | trivial |
+| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 19.87 | +8.1 | trivial |
+| Cislunar | sidereal | 5.519 s (trail-limited) | 16.67 | 15.4 | 18.15 | +1.5 | graded |
 
 **Two things worth reading twice.**
 
-1. The limiting magnitude is **identical at 20.06 for all four stationary-target regimes**. They share an exposure (the cap), a zero trail and therefore the same footprint and noise. Only the target's brightness differs.
+1. The limiting magnitude is **identical at 19.87 for all four stationary-target regimes**. They share an exposure (the cap), a zero trail and therefore the same footprint and noise. Only the target's brightness differs.
 2. Four of five regimes have SNR above 100, where the tool says "detection is not the limiting factor" rather than grading it. A 14-inch telescope at 30 s genuinely doesn't struggle with anything nearer than the Moon. Cislunar is the only regime where detection is close.
 
 **Grading.** PASS at SNR >= 10, WARN at >= 5, FAIL below. If QE, throughput, sky or read noise were assumed rather than entered, the check is capped at WARN and lists what it assumed. If an entered exposure trails the target off the sensor, the check won't PASS either.
 
 **Saturation is not modeled.** A LEO target at SNR 38,900 would saturate the detector in a real 30 s exposure. That's why "trivial" means "choose your exposure for timing and saturation instead".
 
+**Centroid precision.** The check also prints how precisely the target's position can be measured: sigma = star FWHM / 2.355 / SNR per axis. At GEO that is 3.03 / 2.355 / 526 = 2.4 milliarcseconds. It is the photon-limited best case; sky, read noise and coarse pixels all make the real figure worse.
+
 ---
 
 ## Validate it yourself
 
-* **By hand.** Reproduce the GEO row: signal rate, sky rate per pixel, S and B at 30 s, SNR and limiting magnitude. Keep 4 significant figures. Intermediate values for 30 s: S = 2.769e5 e-, sky = 26.0 e- per pixel, footprint 11.46 px, so B = 298 e- and R^2 n = 103 e-^2.
+* **By hand.** Reproduce the GEO row: signal rate, sky rate per pixel, S and B at 30 s, SNR and limiting magnitude. Keep 4 significant figures. Intermediate values for 30 s: S = 2.769e5 e-, sky = 26.0 e- per pixel, footprint 16.83 px, so B = 438 e- and R^2 n = 151 e-^2.
 * **Round trip.** Put the limiting magnitude back into the SNR equation as the target magnitude. You should get exactly SNR = 5. The test `limiting_mag_round_trip` does this.
 * **Script.** `python3 docs/learning/check_examples.py` (section `09-brightness-and-detection.md`) recomputes the derived magnitudes, the zero point, the cislunar exposure and footprint, both SNRs and both limiting magnitudes.
 * **Unit tests.**
@@ -196,7 +198,7 @@ For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21
 ## Self-check
 
 1. Halve the target's cross-section. How much fainter is it?
-2. Why is the cislunar exposure 4.554 s and not 30 s?
+2. Why is the cislunar exposure 5.519 s and not 30 s?
 3. A darker sky (22 instead of 21 mag/arcsec^2) reduces the sky rate by what factor?
 4. Why does the limiting-magnitude formula need a quadratic, rather than just `S = T x sqrt(N)`?
 5. At what SNR does the tool stop grading detection and why?
@@ -205,7 +207,7 @@ For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21
 <summary>Answers</summary>
 
 1. 2.5 x log10(2) = 0.75 mag fainter.
-2. The mount tracks the stars, and the target drifts against them at 0.549"/s. After 4.554 s it has moved one seeing disk (2.5"); longer and it streaks, spreading its light over more pixels and more read noise.
+2. The mount tracks the stars, and the target drifts against them at 0.549"/s. After 5.519 s it has moved one star width (3.03"); longer and it streaks, spreading its light over more pixels and more read noise.
 3. 10^0.4 = 2.512 times fewer sky electrons.
 4. The target's own shot noise is part of the noise, so S appears on both sides. `T x sqrt(N)` is the faint-target limit where S is much smaller than N.
 5. At SNR >= 100 (`SNR_TRIVIAL`). Beyond that, detection is certain and what limits the regime is something else: tracking, timing, acquisition or saturation.

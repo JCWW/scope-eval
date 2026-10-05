@@ -13,7 +13,7 @@ docs. Read the code beside the matching lesson: every block is labelled
 with the lesson file it checks.
 """
 
-from math import pi, sqrt, log, log10, cos, degrees, radians
+from math import pi, sqrt, log, log10, cos, degrees, radians, erf, hypot
 
 ARCSEC_PER_RAD = 206_265.0
 DEG_PER_RAD = 57.2958
@@ -66,6 +66,33 @@ for n, quoted in [(69, 15.4), (4, 19.6), (11, 19.0)]:
 # Ideal pixel.
 for name, fl, quoted in [("RASA 11", 620, 3.8), ("DeltaRho 350", 1050, 6.4), ("CDK17", 2939, 17.8)]:
     show(f"ideal pixel {name}, um", (SEEING / 2) * fl / 206.265, quoted, 0.05)
+# Section 2.7 and reference page 17: the system point spread function.
+FWHM_PER_SIGMA = 2 * sqrt(2 * log(2))
+diffraction = 1.029 * 0.55e-6 / (D_MM / 1000) * ARCSEC_PER_RAD
+show("diffraction FWHM, arcsec", diffraction, 0.33, 0.005)
+optics_r = 1.665 * 4.9 * 206.265 / FL_MM
+show("optics FWHM, 4.9 um read as RMS radius, arcsec", optics_r, 1.60, 0.005)
+show("optics FWHM, read as RMS diameter, arcsec", optics_r / 2, 0.80, 0.005)
+STAR_SAMPLED = sqrt(SEEING ** 2 + diffraction ** 2 + optics_r ** 2)
+show("sampled star FWHM, arcsec", STAR_SAMPLED, 2.99, 0.005)
+show("system-PSF pixels across a star", STAR_SAMPLED / scale, 4.05, 0.01)
+star_d = sqrt(SEEING ** 2 + diffraction ** 2 + (optics_r / 2) ** 2)
+show("sampled star, diameter reading, arcsec", star_d, 2.65, 0.005)
+show("pixels across, diameter reading", star_d / scale, 3.58, 0.01)
+show("system-PSF 2x2 binned pixels across", STAR_SAMPLED / scale / 2, 2.02, 0.01)
+show("system-PSF ideal pixel DeltaRho, um", (STAR_SAMPLED / 2) * FL_MM / 206.265, 7.61, 0.01)
+pixel_ap = FWHM_PER_SIGMA * PIX_UM / sqrt(12) * 206.265 / FL_MM
+show("pixel aperture FWHM, arcsec", pixel_ap, 0.50, 0.005)
+STAR = sqrt(STAR_SAMPLED ** 2 + pixel_ap ** 2)
+show("recorded star FWHM, arcsec", STAR, 3.03, 0.005)
+# Diffusion from MTF 0.5 at Nyquist: sigma = (p / pi) sqrt(-2 ln(0.5 / (2/pi))).
+sigma_diff = PIX_UM / pi * sqrt(-2 * log(0.5 / (2 / pi)))
+show("diffusion FWHM at MTF 0.5, um", FWHM_PER_SIGMA * sigma_diff, 1.96, 0.005)
+# Peak pixel fraction of the sampled star, centred and on a corner.
+sig_px = STAR_SAMPLED / scale / FWHM_PER_SIGMA
+share = lambda d: 0.5 * (erf((0.5 - d) / (sqrt(2) * sig_px)) - erf((-0.5 - d) / (sqrt(2) * sig_px)))
+show("peak pixel fraction, centred, %", 100 * share(0) ** 2, 5.2, 0.05)
+show("peak pixel fraction, on a corner, %", 100 * share(0.5) ** 2, 4.8, 0.05)
 
 # ---------------------------------------------------------------- lesson 03
 section("03-optics-and-focus.md")
@@ -189,10 +216,12 @@ show("energy of a 550 nm photon, J", photon_j, 3.61e-19, 0.01e-19)
 show("mag-0 photons per m^2 per s", watts / photon_j, 8.9e9, 0.05e9)
 K0 = 8.9e9
 QE, TP, SKY, RN = 0.80, 0.85, 21.0, 3.0
-exp_cis = SEEING / lunar
-show("cislunar trail-limited exposure, s", exp_cis, 4.554, 0.01)
-fp_cis = (SEEING / scale) * ((SEEING + lunar * exp_cis) / scale)
-show("cislunar footprint, px", fp_cis, 22.914, 0.03)
+# The detection check sizes everything on the recorded star (lesson 2, section 2.7).
+show("cislunar exposure, seeing alone, s", SEEING / lunar, 4.554, 0.01)
+exp_cis = STAR / lunar
+show("cislunar trail-limited exposure, s", exp_cis, 5.519, 0.01)
+fp_cis = (STAR / scale) * ((STAR + lunar * exp_cis) / scale)
+show("cislunar footprint, px", fp_cis, 33.7, 0.05)
 
 
 def snr_and_limit(mag, exposure, footprint, threshold=5.0):
@@ -207,18 +236,20 @@ def snr_and_limit(mag, exposure, footprint, threshold=5.0):
     return snr, -2.5 * log10(s_min / k)
 
 
-fp_still = (SEEING / scale) ** 2
+fp_still = (STAR / scale) ** 2
+show("stationary footprint, px", fp_still, 16.83, 0.01)
 snr_geo, lim_still = snr_and_limit(target_mag(37_000), 30, fp_still)
 show("GEO SNR (30 s, stare)", snr_geo, 526, 3)
-show("limiting mag, stationary regimes", lim_still, 20.06, 0.02)
+show("limiting mag, stationary regimes", lim_still, 19.87, 0.02)
+show("GEO centroid precision, mas", STAR / FWHM_PER_SIGMA / snr_geo * 1000, 2.4, 0.05)
 sig_geo = K0 * 10 ** (-0.4 * target_mag(37_000)) * a_dr * QE * TP * 30
 sky_geo_px = K0 * 10 ** (-0.4 * SKY) * a_dr * QE * TP * scale ** 2 * 30
 show("GEO signal in 30 s, e-", sig_geo, 2.769e5, 0.001e5)
 show("GEO sky per pixel in 30 s, e-", sky_geo_px, 26.0, 0.05)
-show("GEO sky in footprint B, e-", sky_geo_px * fp_still, 298, 1)
-show("GEO read-noise variance R^2 n, e-^2", RN ** 2 * fp_still, 103, 0.5)
+show("GEO sky in footprint B, e-", sky_geo_px * fp_still, 438, 1)
+show("GEO read-noise variance R^2 n, e-^2", RN ** 2 * fp_still, 151, 0.5)
 snr_cis, lim_cis = snr_and_limit(target_mag(384_400), exp_cis, fp_cis)
-show("cislunar SNR", snr_cis, 14.9, 0.1)
+show("cislunar SNR", snr_cis, 15.4, 0.1)
 show("cislunar limiting mag", lim_cis, 18.15, 0.02)
 
 # ---------------------------------------------------------------- lesson 10

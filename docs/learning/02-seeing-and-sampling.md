@@ -98,7 +98,7 @@ The tool grades it this way:
 | 4.0 to 6.0 | WARN | Oversampled, read-noise penalty on CMOS |
 | above 6.0 | FAIL | Heavily oversampled |
 
-The running example, at 3.38 pixels across, is mildly oversampled: PASS.
+With the seeing alone, the running example is 3.38 pixels across, mildly oversampled: PASS. The tool's star is a little bigger than the seeing, and section 2.7 shows that this tips the running example to WARN.
 
 ## 2.4 Binning
 
@@ -176,6 +176,28 @@ For the DeltaRho: 1x1 gives 3.76 / 6.36 = 0.59, 2x2 gives 7.52 / 6.36 = 1.18. 2x
 
 **Grading.** PASS if 0.75 <= m <= 1.33 with no bin or 2x2. WARN if the match needs 3x3 or 4x4 (CMOS read-noise penalty, section 2.5), or if no bin gets within range.
 
+## 2.7 The star is bigger than the seeing
+
+Everything above treats a star as exactly the seeing FWHM. That is the biggest term, but not the only one. The telescope's diffraction, its optical aberrations and the detector each blur the star a little more. Treating each blur as a Gaussian, their widths add in quadrature (square, add, square root), the same rule lesson 3 uses for optics vs seeing. The tool calls the result the **system point spread function (PSF)** and uses it for checks 2 and 3 instead of the seeing alone. [Reference page 17](../17-point-spread-function.md) derives each term.
+
+**Worked example, running configuration.**
+
+```
+seeing                                   2.50"
+diffraction  1.029 x 0.55e-6 / 0.35 m  = 0.33"
+optics       4.9 um RMS, read as a radius:
+             1.665 x 4.9 = 8.16 um     = 1.60"
+star FWHM    sqrt(2.50^2 + 0.33^2 + 1.60^2) = 2.99"
+
+pixels across = 2.99 / 0.739 = 4.05   -> just over 4.0: WARN
+best bin      = 2x2, 2.02 pixels across
+ideal pixel   = (2.99 / 2) x 1050 / 206.265 = 7.61 um, so 2x2 (7.52 um) matches at 0.99
+```
+
+The optics term depends on whether the spec sheet's 4.9 um is an RMS radius or diameter. As a diameter it is 0.80", the star is 2.65" and 3.58 pixels across, a PASS. The tool reads an unlabelled figure as a radius, because that is what Zemax spot diagrams report and it is the larger blur. It also prints the diameter reading so you can see how much hangs on it.
+
+The detector adds two more terms that don't change the sampling check but do matter for detection (lesson 9): the pixel's own square shape (0.68 x the pixel pitch, 0.50" here) and charge diffusion, if you enter the camera's measured MTF.
+
 ---
 
 ## Validate it yourself
@@ -191,9 +213,10 @@ For the DeltaRho: 1x1 gives 3.76 / 6.36 = 0.59, 2x2 gives 7.52 / 6.36 = 1.18. 2x
   cargo test ideal_pixel_values
   cargo test closest_binned_pixel_matches_on_ratio_scale
   cargo test sampling_footprint_and_read_noise_penalty
+  cargo test running_example_budget
   ```
 
-* **Tool output.** Run `cargo run --release -- --demo` and read checks 2 and 3 for the DeltaRho 350 + IMX455. Then change the seeing in the interactive menu (*Change site conditions*) to 1.5" and watch the sampling verdict change.
+* **Tool output.** Run `cargo run --release -- --demo` and read checks 2 and 3 for the DeltaRho 350 + IMX455. Check 2 should show the 2.99" star, 4.05 pixels across and the 3.58-pixel diameter reading from section 2.7. Then change the seeing in the interactive menu (*Change site conditions*) to 1.5" and watch the sampling verdict change.
 
 ## Self-check
 
@@ -217,6 +240,7 @@ For the DeltaRho: 1x1 gives 3.76 / 6.36 = 0.59, 2x2 gives 7.52 / 6.36 = 1.18. 2x
 ## Where it lives in the code
 
 * `src/calculations/optics.rs`: `plate_scale_arcsec_per_px`, `pixels_across_star`, `best_bin`, `closest_binned_pixel_um`, `star_footprint_px`, `read_noise_variance_penalty`, `ideal_pixel_um`.
+* `src/psf.rs`: `PsfBudget`, the system PSF from section 2.7. The formulas are in `src/calculations/psf.rs`.
 * `src/checks.rs`: `check_sampling` and `check_ideal_pixel` apply the thresholds.
 * `src/constants.rs`, module `checks_limits`: `SAMPLING_*`, `MAX_BIN`, `PIXEL_MATCH_*`.
 
