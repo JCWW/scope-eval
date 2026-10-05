@@ -16,21 +16,18 @@ The tool has three external dependencies, all pure Rust: `serde` and `serde_yaml
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [A short primer on the terms](#a-short-primer-on-the-terms)
+2. [Learning the concepts](#learning-the-concepts)
 3. [Inputs and where to find them](#inputs-and-where-to-find-them)
-4. [The algorithm](#the-algorithm)
-5. [The eight checks, with formulas and worked examples](#the-eight-checks)
-6. [Supplementary: timing reference for GEO stare mode](#supplementary-timing-reference-for-geo-stare-mode)
-7. [Orbital-regime evaluations](#orbital-regime-evaluations)
-8. [Mount acceleration](#mount-acceleration)
-9. [Target brightness and detection](#target-brightness-and-detection)
-10. [Pass prediction](#pass-prediction)
-11. [The comparison table](#the-comparison-table)
-12. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
-13. [Assumptions and limitations](#assumptions-and-limitations)
-14. [Spec-sheet red flags](#spec-sheet-red-flags)
-15. [Presets and their sources](#presets-and-their-sources)
-16. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
+4. [How an evaluation works](#how-an-evaluation-works)
+5. [The eight checks](#the-eight-checks)
+6. [Orbital-regime evaluations](#orbital-regime-evaluations)
+7. [Pass prediction](#pass-prediction)
+8. [The comparison table](#the-comparison-table)
+9. [Thresholds and how to tune them](#thresholds-and-how-to-tune-them)
+10. [Assumptions and limitations](#assumptions-and-limitations)
+11. [Spec-sheet red flags](#spec-sheet-red-flags)
+12. [Presets and their sources](#presets-and-their-sources)
+13. [Code structure and extending the tool](#code-structure-and-extending-the-tool)
 
 ---
 
@@ -43,7 +40,7 @@ cargo build --release          # build
 cargo run --release            # interactive menu
 cargo run --release -- --demo  # evaluate the presets, show one full regime breakdown, compare all
 cargo run --release -- --help  # usage
-cargo test                     # run the worked examples in this README, and the orbit-prop library's tests
+cargo test                     # run the worked examples from docs/learning, and the orbit-prop library's tests
 ```
 
 A typical interactive session:
@@ -62,51 +59,29 @@ Output is plain ASCII (for example `um` for micrometers and `"` for arcseconds) 
 
 ---
 
-## A short primer on the terms
+## Learning the concepts
 
-You don't need an optics background to use this tool, but these terms appear throughout.
+This README covers how to run the tool and read its output. The terms, formulas, derivations and worked examples behind every check are in a set of lessons in [`docs/learning/`](docs/learning/README.md), written for engineers without an optics or astrodynamics background:
 
-**Arcsecond (").** A unit of angle. A full circle is 360 degrees, each degree is 60 arcminutes ('), and each arcminute is 60 arcseconds. One arcsecond is roughly the width of a coin seen from 4 km away. A radian is 206,265 arcseconds, a number that appears in several formulas below.
+| # | Lesson | Covers |
+|---|---|---|
+| 1 | [Angles and magnitudes](docs/learning/01-angles-and-magnitudes.md) | Arcseconds, the small-angle rule, the magnitude scale |
+| 2 | [Seeing and sampling](docs/learning/02-seeing-and-sampling.md) | Checks 2 and 3: plate scale, binning, CMOS read noise, ideal pixel |
+| 3 | [Optics and focus](docs/learning/03-optics-and-focus.md) | Checks 1, 4 and 7: image circle, spot size vs seeing, critical focus zone |
+| 4 | [Light collection and search speed](docs/learning/04-light-collection-and-search.md) | Checks 5 and 6: obstruction, effective area, depth, etendue |
+| 5 | [Practical fit](docs/learning/05-practical-fit.md) | Check 8: payload and back focus |
+| 6 | [Orbits and angular rates](docs/learning/06-orbits-and-angular-rates.md) | The regimes, vis-viva, rate vs stars and ground, acquisition |
+| 7 | [Timing and shutters](docs/learning/07-timing-and-shutters.md) | Timestamp accuracy, rolling-shutter skew, trailing |
+| 8 | [Mount dynamics](docs/learning/08-mount-dynamics.md) | Tracking rate, keyholes, peak acceleration, slew and settle |
+| 9 | [Brightness and detection](docs/learning/09-brightness-and-detection.md) | Target magnitude, photon flux, SNR, limiting magnitude |
+| 10 | [Pass prediction](docs/learning/10-pass-prediction.md) | TLEs, SGP4, J2, reference frames, pass search, lighting |
+| 11 | [How the tool judges](docs/learning/11-how-the-tool-judges.md) | The pipeline, statuses, and which numbers are physics vs rules of thumb |
 
-**Seeing and FWHM.** Turbulence in the atmosphere blurs every star into a small fuzzy disk. "Seeing" is the size of that disk, measured as its **full width at half maximum (FWHM)**: the width of the blur where brightness has fallen to half its peak. Typical seeing at a decent mid-elevation site is 2 to 3 arcseconds. Seeing is set by the site and the weather, not by the telescope, and it's the starting point for most checks.
+Each lesson ends with ways to check its numbers yourself. [`docs/learning/check_examples.py`](docs/learning/check_examples.py) recomputes every worked example using only the Python standard library, independently of the Rust code:
 
-**Aperture (D).** The diameter of the telescope's main light-collecting opening.
-
-**Focal length (FL).** The effective distance over which the telescope brings light to a focus. Longer focal length means a more magnified image on the sensor.
-
-**Focal ratio (N, written f/N).** Focal length divided by aperture. A low number (f/2 or f/3) is called "fast" and gives a wide, bright, small-scale image. A high number (f/7 or f/8) is "slow" and gives a narrow, magnified image.
-
-**Central obstruction.** Many telescopes have a secondary mirror, lens group or camera sitting in the middle of the incoming light, blocking part of the aperture.
-
-**Image circle.** The diameter of the region at the focal plane where the image is sharp and flat. The camera sensor must fit inside it.
-
-**Plate scale.** How much sky one pixel sees, in arcseconds per pixel.
-
-**Binning.** Combining a square block of neighboring pixels (2x2, 3x3 and so on) into one larger "super-pixel."
-
-**Magnitude.** The astronomical brightness scale. It is logarithmic and runs backwards: larger numbers are fainter. A difference of 5 magnitudes is a factor of 100 in brightness, so 1 magnitude is a factor of about 2.512.
-
-**Etendue.** Collecting area multiplied by field of view. It measures how fast a telescope can survey the sky to a given depth.
-
-**Critical focus zone (CFZ).** How far the sensor can sit from perfect focus before the image visibly degrades.
-
-**GEO and stare mode.** A geosynchronous satellite orbits once per sidereal day, so it stays nearly fixed relative to the ground. If the telescope stops tracking (called stare mode), the GEO object appears as a point while the background stars drift past and leave streaks.
-
-**Rolling shutter.** Most CMOS sensors expose and read out the image one row at a time rather than all at once. The bottom row is captured slightly later than the top row. A **global shutter** sensor captures every row at the same instant.
-
-**Orbital regimes.** Satellites are grouped by altitude and orbit shape:
-
-* **LEO (low Earth orbit)**, roughly 200 to 2,000 km. Fast-moving across the sky, usually bright, visible for only minutes per pass.
-* **MEO (medium Earth orbit)**, roughly 2,000 to 35,000 km. Navigation constellations such as GPS (about 20,200 km) live here.
-* **GEO (geosynchronous orbit)**, about 35,786 km. Orbits once per sidereal day, so it appears nearly fixed in the sky.
-* **HEO (highly elliptical orbit)**, such as the Molniya orbit. Very elongated: fast near the low point, slow and distant near the high point (apogee).
-* **Cislunar space**, out to and around the Moon's distance (about 384,000 km). Very distant and therefore very faint.
-
-**TLE and ephemeris.** A two-line element set (TLE) or ephemeris is a prediction of where a satellite will be. Predictions have errors, mostly along the direction of travel, so the telescope must have a wide enough field to catch the target anyway.
-
-**Tracking modes.** *Stare*: the mount is stopped. *Sidereal tracking*: the mount follows the stars. *Rate tracking*: the mount follows the satellite's predicted path, so the satellite stays a point and the stars streak. Rate tracking requires the mount's software to support **non-sidereal tracking**.
-
-**Keyhole.** Every two-axis mount has a direction where one axis would have to spin infinitely fast to follow an object. For an alt-azimuth mount it is straight overhead (the zenith). For an equatorial mount it is near the celestial pole.
+```bash
+python3 docs/learning/check_examples.py
+```
 
 ---
 
@@ -147,36 +122,11 @@ Obstruction can be typed as a percent (56) or a decimal (0.56). The tool treats 
 
 ---
 
-## The algorithm
+## How an evaluation works
 
-For each configuration the tool runs the same fixed pipeline:
+For each configuration the tool runs the eight general checks, prints an ungraded GEO stare-mode timing reference, then evaluates the telescope, camera, mount and system (detection) against each of the five orbital regimes. The regime checks reuse the plate scale, recommended bin, field of view and effective area from the general checks. [Lesson 11](docs/learning/11-how-the-tool-judges.md) walks through the full pipeline.
 
-```
-1. Read site assumptions        seeing FWHM, reference wavelength (0.55 um)
-2. Derive basic geometry        f-ratio = FL / D
-                                sensor width, height, diagonal (mm) = pixels x pixel size
-3. Run the eight checks         each returns: status, detail lines, verdict
-     1  Sensor fit              image circle vs sensor diagonal
-     2  Sampling                plate scale vs seeing, recommended bin
-     3  Ideal pixel             the pixel size this telescope wants
-     4  Optics vs seeing        does the glass or the air limit the image?
-     5  Area and depth          effective collecting area, magnitudes vs reference
-     6  Field and search        field of view, etendue vs reference
-     7  Focus tolerance         critical focus zone
-     8  Practical fit           payload vs mount rating, back focus
-4. Compute the GEO stare-mode timing reference (not graded)
-     star drift, timing sensitivity, rolling-shutter skew
-5. For each orbital regime (LEO, MEO, GEO, HEO, cislunar):
-     Telescope  acquisition field, field dwell, depth relevance
-     Camera     timestamp accuracy, shutter skew, exposure vs trailing
-     Mount      tracking rate (with keyhole), non-sidereal tracking
-     -> worst status per component, and overall
-6. Store headline metrics for the comparison tables
-```
-
-Step 5 reuses results from step 3. The regime checks use the plate scale and recommended bin from check 2, the field of view from check 6 and the effective area from check 5.
-
-The **reference** for checks 5 and 6 is always the first configuration in the session. When you change the seeing, every stored configuration is re-evaluated in order, so the reference rule stays consistent.
+The **reference** for depth and search speed is always the first configuration in the session. When you change the seeing, every stored configuration is re-evaluated in order, so the reference doesn't change.
 
 ### What the statuses mean
 
@@ -195,323 +145,28 @@ The thresholds behind PASS, WARN and FAIL are engineering rules of thumb, not ph
 
 ## The eight checks
 
-Every worked example below uses a **PlaneWave DeltaRho 350** (350 mm aperture, 1050 mm focal length, f/3, 56% obstruction by diameter, 60 mm image circle) with a **Sony IMX455** full-frame sensor (9576 x 6388 pixels of 3.76 um, so 36.0 x 24.0 mm), at **2.5" seeing**. These same numbers are checked by the unit tests.
-
-### Check 1: Sensor fit
-
-**Question.** Does the whole sensor fit inside the telescope's sharp, flat image circle?
-
-**Formula.**
-
-```
-sensor width  (mm) = width_px  x pixel_um / 1000
-sensor height (mm) = height_px x pixel_um / 1000
-sensor diagonal    = sqrt(width^2 + height^2)
-
-PASS if image circle >= diagonal
-```
-
-**Why.** The sensor is a rectangle, and its corners are the points farthest from the center. Those corners sit at half the diagonal from the optical axis. If the image circle is smaller than the diagonal, the corners of every frame are dim or blurry.
-
-**Worked example.** Diagonal = sqrt(36.0^2 + 24.0^2) = 43.3 mm. The image circle is 60 mm, so it passes, with headroom for a larger sensor later.
-
-**Thresholds.** PASS if the image circle covers the diagonal. WARN if it covers at least 90% of the diagonal (soft corners). FAIL below that.
-
-### Check 2: Sampling (plate scale vs seeing)
-
-**Question.** Is each star spread across the right number of pixels?
-
-**Formula.**
-
-```
-plate scale ("/px)    = 206.265 x pixel_um / FL_mm
-pixels across a star  = seeing FWHM (") / plate scale
-footprint (pixels)    ~ (pixels across)^2
-```
-
-**Why the formula has this shape.** It's the small-angle rule: angle = size / distance. The telescope projects the sky onto the sensor at a distance equal to the focal length, so a pixel of size p subtends p / FL radians. Multiply by 206,265 to convert radians to arcseconds. The 206.265 (instead of 206,265) absorbs the factor of 1000 from mixing micrometers and millimeters.
-
-**Why about 2 pixels across a star is the target.** The atmosphere already blurs each star to the seeing FWHM, so finer pixels can't record real detail.
-
-* **Too few pixels (undersampled).** A star lands in one or two pixels, so its position (centroid) can only be measured coarsely. That hurts astrometry, which is measuring precise sky positions.
-* **Too many pixels (oversampled).** A faint target's light is smeared thinly over many pixels. Each pixel adds its own electronic read noise when it is read out, so more pixels means more noise for the same light.
-
-About 2 pixels across the FWHM is the standard compromise.
-
-**Worked example.**
-
-```
-plate scale         = 206.265 x 3.76 / 1050 = 0.739 "/px
-pixels across star  = 2.5 / 0.739           = 3.38
-footprint           ~ 3.38^2                = ~11 pixels
-```
-
-That's mildly oversampled. Binning 2x2 gives 1.48 "/px and 1.69 pixels across, which is right on target.
-
-**Recommended bin.** The tool tries square bins from 1x1 to 4x4 and picks the one that brings pixels-across closest to 2.
-
-**Binning and read noise (important for CMOS cameras).** The standard signal-to-noise equation for measuring a faint object is:
-
-```
-SNR = S / sqrt( S + n x (sky + R^2) )
-
-S   = photons from the target
-n   = number of pixels added together to measure it
-sky = sky photons per pixel
-R   = read noise per pixel readout (electrons)
-```
-
-Every pixel readout adds R^2 of noise variance, so the read-noise term grows with the number of pixels. Consider a faint target delivering 400 photons, with R = 2 electrons, and ignore sky for a moment:
-
-| Situation | Pixels read | Noise | SNR |
-|---|---|---|---|
-| Star spread over 69 pixels (heavily oversampled) | 69 | sqrt(400 + 69 x 4) = 26.0 | 15.4 |
-| Same, CCD hardware binning 4x4 (charge combined before readout) | ~4 | sqrt(400 + 4 x 4) = 20.4 | 19.6 |
-| Same, CMOS digital binning 4x4 (each pixel read, then added) | 69 | sqrt(400 + 69 x 4) = 26.0 | 15.4 |
-| Star spread over 11 pixels (well matched) | 11 | sqrt(400 + 11 x 4) = 21.1 | 19.0 |
-
-CMOS sensors bin *after* readout, so every native pixel has already contributed its read noise. Digital binning improves SNR **per super-pixel**, but it does not improve the SNR **of the object as a whole**. **You cannot bin your way out of oversampling on a CMOS camera.** That's why the tool reports a "read-noise penalty vs ideal," which is footprint / 4.
-
-Digital binning is still useful. It shrinks data volume (2x2 cuts it by 4), raises per-pixel SNR so simple detection thresholds work better, and makes centroiding better behaved.
-
-The sky term caveat: sky brightness per square arcsecond is fixed by the site, so binning never changes total sky noise. When exposures are long enough that sky noise dominates read noise, the oversampling penalty shrinks. It matters most for short exposures and dark skies.
-
-**Thresholds (pixels across a star).**
-
-| Range | Status | Meaning |
-|---|---|---|
-| below 1.0 | FAIL | Undersampled |
-| 1.0 to 1.5 | WARN | Slightly undersampled |
-| 1.5 to 2.5 | PASS | Well sampled |
-| 2.5 to 4.0 | PASS | Mildly oversampled, bin 2x2 if you like |
-| 4.0 to 6.0 | WARN | Oversampled, read-noise penalty on CMOS |
-| above 6.0 | FAIL | Heavily oversampled |
-
-### Check 3: Ideal pixel size (camera match)
-
-**Question.** What pixel size does this telescope want, and does this camera provide it, natively or after binning?
-
-**Formula.** The plate-scale formula solved for pixel size, with the plate scale set to half the seeing:
-
-```
-ideal pixel (um) = (seeing / 2) x FL_mm / 206.265
-```
-
-**Why it's useful.** This turns the question around. Instead of asking "is this camera OK on this telescope?" it tells you what camera the telescope is asking for. That makes it a fast filter when comparing scopes.
-
-**Worked examples at 2.5" seeing.**
-
-| Telescope | Focal length | Ideal pixel | IMX455 (3.76 um) match |
-|---|---|---|---|
-| Celestron RASA 11 | 620 mm | 3.8 um | Natural match |
-| PlaneWave DeltaRho 350 | 1050 mm | 6.4 um | Good after 2x2 (7.5 um) |
-| PlaneWave CDK17 | 2939 mm | 17.8 um | Needs 4x4, read-noise penalty |
-
-**Algorithm.** The tool finds the bin factor b (1 to 4) whose effective pixel (b x pixel) is closest to ideal on a ratio scale, then computes the match ratio m = effective / ideal.
-
-**Thresholds.** PASS if 0.75 <= m <= 1.33 with no binning or 2x2. WARN if a match needs 3x3 or 4x4 binning (CMOS read-noise penalty), or if no bin gets within range.
-
-### Check 4: Optical quality vs seeing
-
-**Question.** Are the optics sharp enough that the atmosphere, not the glass, sets the image quality, both at the center and at the sensor's corners?
-
-**Formulas.**
-
-```
-seeing blur at focal plane (um) = seeing (") x FL_mm / 206.265
-
-optics FWHM (um) ~ 1.665 x RMS spot radius
-                 ~ 0.833 x RMS spot diameter
-
-combined blur    = sqrt(seeing_blur^2 + optics_FWHM^2)
-star growth      = combined / seeing_blur - 1
-```
-
-**Why each step.**
-
-1. **Seeing blur in micrometers.** Same small-angle rule as plate scale, run in reverse. It converts the seeing angle into a physical size on the sensor, so it can be compared directly with the vendor's spot size.
-2. **RMS spot to FWHM.** Vendors quote optical performance as an RMS (root-mean-square) spot size. To compare it with seeing, which is a FWHM, the tool assumes the optical blur is roughly a round Gaussian. For a round Gaussian with per-axis standard deviation sigma, FWHM = 2.355 x sigma and RMS radius = 1.414 x sigma, so FWHM = 1.665 x RMS radius. If the vendor's figure is a diameter, divide by 2 first.
-3. **Adding in quadrature.** Two independent blurs (atmosphere and optics) combine by convolution. For Gaussian blurs, their variances add, so their widths add as the square root of the sum of squares. A small optical blur barely enlarges a large seeing blur.
-
-**Field position.** Spot size usually grows away from the optical axis. The tool evaluates the center (the quoted point closest to the axis) and the sensor corner (radius = half the sensor diagonal). It interpolates linearly between quoted points and extrapolates linearly from the last two points if the corner lies beyond them (flagged as "extrapolated").
-
-**The radius-or-diameter ambiguity.** Spec sheets often don't say whether their RMS figure is a radius or a diameter, and the answer changes the result by a factor of 2. If you choose "not stated," the tool evaluates both readings. If they lead to different statuses, the check returns WARN and tells you to ask the vendor.
-
-**Worked example (DeltaRho 350).** Seeing blur = 2.5 x 1050 / 206.265 = 12.7 um. The quoted spot is 4.9 um RMS on-axis, interpolated to about 6.1 um at the sensor corner (21.6 mm off-axis).
-
-| Reading | Optics FWHM, center / corner | Star growth, center / corner | Status |
-|---|---|---|---|
-| RMS radius | 8.2 / 10.2 um | 19% / 28% | WARN |
-| RMS diameter | 4.1 / 5.1 um | 5% / 8% | PASS |
-
-The readings disagree, so the result is WARN: ask the vendor which convention they use.
-
-**Thresholds (worst-case star growth).** PASS up to 15%. WARN up to 35%. FAIL above that. If no spot data is entered, the result is INFO with a reminder of what to request.
-
-### Check 5: Collecting area and depth
-
-**Question.** How much light does the telescope actually collect, and how much fainter can it see than the reference?
-
-**Formulas.**
-
-```
-geometric area      = pi/4 x D^2
-blocked fraction    = obstruction_by_diameter^2      (or obstruction_by_area, used as-is)
-effective area      = geometric area x (1 - blocked fraction)
-equivalent aperture = 2 x sqrt(effective area / pi)
-
-depth vs reference (mag) = 2.5 x log10(effective area / reference area)
-```
-
-**Why square the obstruction.** Area goes with diameter squared. When the obstruction is quoted as a fraction of the diameter, it must be squared too to become a fraction of the area. A "56% obstruction by diameter" blocks only 31% of the light. If the spec sheet quotes it by area, do **not** square it.
-
-**Why 2.5 x log10.** That's the definition of the magnitude scale: a brightness ratio r corresponds to 2.5 x log10(r) magnitudes. A rule of thumb: 30% more light is about a quarter magnitude deeper, and twice the light is about 0.75 magnitude.
-
-**Worked example.**
-
-```
-DeltaRho 350:  pi/4 x 0.350^2 = 0.0962 m^2,  blocked 0.56^2 = 0.314,  effective 0.0660 m^2
-RASA 11:       pi/4 x 0.279^2 = 0.0611 m^2,  blocked (114/279)^2 = 0.167,  effective 0.0509 m^2
-
-depth difference = 2.5 x log10(0.0660 / 0.0509) = 2.5 x log10(1.30) = +0.28 mag
-```
-
-Despite being 14 inches against 11, the DeltaRho reaches only about 0.28 magnitude deeper, because of its larger central obstruction.
-
-**Status.** Always INFO. Depth is a trade-off to weigh, not a pass/fail property.
-
-### Check 6: Field of view and search speed
-
-**Question.** How much sky does each frame cover, and how fast can this configuration survey the sky compared to the reference?
-
-**Formulas.**
-
-```
-FOV (deg) = sensor size (mm) / FL_mm x 57.2958        (for each axis)
-field area (deg^2) = FOV_width x FOV_height
-etendue = effective area (m^2) x field area (deg^2)
-search speed vs reference = etendue / reference etendue
-```
-
-**Why.** FOV is the small-angle rule applied to the whole sensor, with 57.2958 converting radians to degrees. Etendue multiplies how deep each look goes (area) by how much sky each look covers (field). A useful analogy is mowing a lawn: field of view is the width of the mower, and aperture is the power of the engine.
-
-**Worked example.**
-
-```
-DeltaRho 350:  36.0 / 1050 x 57.3 = 1.96 deg,  24.0 / 1050 x 57.3 = 1.31 deg  ->  2.58 deg^2
-               etendue = 0.0660 x 2.58 = 0.170
-RASA 11:       36.0 / 620 x 57.3 = 3.33 deg,   24.0 / 620 x 57.3 = 2.22 deg   ->  7.39 deg^2
-               etendue = 0.0509 x 7.39 = 0.376
-
-RASA search speed vs DeltaRho = 0.376 / 0.170 = 2.2x
-```
-
-The RASA sweeps sky about 2.2 times faster, but each look is about 0.28 magnitude shallower. "Search speed" compares each configuration at its own depth.
-
-The tool also reports how many non-overlapping fields are needed to tile 100 square degrees, which gives a feel for survey cadence.
-
-**Status.** Always INFO.
-
-### Check 7: Focus tolerance
-
-**Question.** How precisely must the sensor sit at focus?
-
-**Formula.**
-
-```
-CFZ (um) = +/- 2.44 x wavelength_um x N^2        (wavelength = 0.55 um, N = FL / D)
-```
-
-**Why N squared.** Two effects each contribute a factor of N.
-
-1. The smallest spot the optics can form (the diffraction-limited Airy disk) is about 2.44 x wavelength x N wide. Slower optics have a larger acceptable blur.
-2. The cone of light converging to focus has a slope of about 1/N. Slower optics have a gentler cone, so moving the sensor along the axis enlarges the blur more slowly.
-
-Tolerance = acceptable blur / cone slope = (wavelength x N) x N, hence N squared.
-
-**Worked examples.**
-
-| Telescope | f-ratio | CFZ |
-|---|---|---|
-| RASA 11 | f/2.2 | +/- 6.5 um |
-| DeltaRho 350 | f/3.0 | +/- 12.1 um |
-| CDK14 | f/7.2 | +/- 69.6 um |
-
-For scale, a human hair is about 70 um thick. Fast systems drift out of focus with small temperature changes, and a sensor tilted by a few micrometers across its width will be sharp on one side and soft on the other.
-
-**Thresholds.** PASS if 40 um or more (forgiving). PASS with a note if between 15 and 40 um (motorized focuser recommended). WARN below 15 um (needs a motorized focuser, temperature-compensated autofocus and a sensor tilt adjuster). This check never fails, because tight focus is a requirement to plan for, not a disqualifier.
-
-### Check 8: Practical fit
-
-**Question.** Can the mount carry the payload with margin, and is there enough back focus for the camera train?
-
-**Formulas.**
-
-```
-payload = OTA weight + camera weight + accessories weight
-load fraction = payload / mount rating
-
-back focus OK if available >= required
-```
-
-**Why 70%.** A mount rated for a given payload is rarely stiff at that limit. Wind, vibration and fast slews all perform better with margin. Keeping the payload at or below about 70% of the rating is a common rule of thumb.
-
-**Worked example.** DeltaRho 350 (46 lb) + IMX455 camera (2 lb) + 10 lb of accessories = 58 lb on a 100 lb mount = 58% of rating. PASS.
-
-**Thresholds.** PASS at 70% or less. WARN up to 90%. FAIL above 90%. Back focus is PASS if available meets the requirement, FAIL if short. Any piece left blank is skipped and noted. If nothing can be evaluated, the status is INFO.
-
-**Back-focus caution.** Vendors measure back focus from different reference points, for example "from the mounting surface without focuser" versus "with focuser installed at mid-travel." Make sure the requirement you enter is measured from the same reference as the telescope's figure.
-
----
-
-## Supplementary: timing reference for GEO stare mode
-
-These numbers are printed after the eight checks but are not graded. They show, for the GEO case, how timing errors and rolling-shutter readout turn into position errors. The [orbital-regime evaluations](#orbital-regime-evaluations) apply the same ideas to every regime and grade them.
-
-**Star drift past a GEO target.**
-
-```
-sidereal rate = 1,296,000" / 86,164.09 s = 15.04 "/s
-```
-
-Earth turns 360 degrees (1,296,000 arcseconds) once per sidereal day (86,164 seconds). A GEO satellite turns with Earth, so in stare mode the stars slide past it at this rate. The GEO belt lies close to the celestial equator, so the cos(declination) factor is close to 1 and is ignored.
-
-```
-star streak per second (px) = 15.04 / binned plate scale
-```
-
-For the DeltaRho 350 binned 2x2: 15.04 / 1.48 = 10 pixels per second of exposure.
-
-**Timing sensitivity.**
-
-```
-position error (") = 15.04 x timing error (s)
-```
-
-A satellite's reported position is only as good as the timestamp on the image. A 10 ms timing error gives 0.15" of along-track error for a GEO object. A computer clock plus USB latency can easily be off by tens of milliseconds, which is why hardware GPS timestamping matters. For comparison, a low Earth orbit object moving about 1 degree per second (3,600 "/s) picks up 3.6" of error per millisecond.
-
-**Rolling-shutter skew.**
-
-```
-readout skew (s) = number of rows x line time
-star skew (")    = 15.04 x readout skew
-per-row time     = t(first row) + row index x line time
-```
-
-For the IMX455 in a Moravian C3-61000: 6,388 rows x 39.028 us = 0.249 s. In stare mode that's a 3.75" systematic skew between the top and bottom of the frame. If the reduction software uses a single timestamp for the whole frame, the plate solution absorbs this skew as a false distortion. The fix is to assign each row its own time using the per-row formula. Global-shutter sensors don't have this effect.
+These checks describe the optical system in general. They don't depend on the target.
+
+| # | Check | Question | Graded | Lesson |
+|---|---|---|---|---|
+| 1 | Sensor fit | Does the sensor's diagonal fit inside the image circle? | PASS / WARN / FAIL | [3](docs/learning/03-optics-and-focus.md) |
+| 2 | Sampling | Are there about 2 pixels across a star at your seeing? Which bin gets closest? | PASS / WARN / FAIL | [2](docs/learning/02-seeing-and-sampling.md) |
+| 3 | Ideal pixel | What pixel size does this focal length want, and does the camera match it natively or after binning? | PASS / WARN | [2](docs/learning/02-seeing-and-sampling.md) |
+| 4 | Optics vs seeing | Does the optical blur enlarge stars noticeably beyond the seeing, at the center and at the sensor's corner? | PASS / WARN / FAIL (INFO without spot data) | [3](docs/learning/03-optics-and-focus.md) |
+| 5 | Area and depth | Effective collecting area after the obstruction, and depth in magnitudes vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
+| 6 | Field and search | Field of view, and etendue (search speed) vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
+| 7 | Focus tolerance | How wide is the critical focus zone? | PASS / WARN | [3](docs/learning/03-optics-and-focus.md) |
+| 8 | Practical fit | Is the payload within 70% of the mount's rating? Is there enough back focus? | PASS / WARN / FAIL | [5](docs/learning/05-practical-fit.md) |
+
+If your spec sheet doesn't say whether its RMS spot size is a radius or a diameter, choose "not stated". Check 4 then evaluates both readings and returns WARN if they disagree, so you know to ask the vendor.
+
+After the eight checks, every evaluation prints a **timing reference for GEO stare mode**: star drift past a GEO target, position error per 10 ms of timing error, and rolling-shutter skew with the per-row time correction. It is not graded. [Lesson 7](docs/learning/07-timing-and-shutters.md) explains each line.
 
 ---
 
 ## Orbital-regime evaluations
 
-The eight checks describe the optical system in general. Whether that system can actually observe a target depends on where the target is: how far away, how fast it moves and how well its position is predicted. This section evaluates the **telescope**, **camera** and **mount** separately against five representative regimes, so you can see which component limits which mission.
-
-### The regimes and how their numbers are derived
-
-Each regime is described by six numbers. Two are rates, measured two different ways:
-
-* **Rate vs stars.** How fast the target moves against the background stars. This drives timing requirements, rolling-shutter skew and trailing, because positions are measured against the stars.
-* **Rate vs ground.** How fast the target moves across the sky as seen from the site. This is what the mount must follow.
+Whether a system can observe a target depends on where the target is: how far away, how fast it moves and how well its position is predicted. The tool evaluates each component against five representative regimes:
 
 | Regime | Representative case | Range (km) | Rate vs stars ("/s) | Rate vs ground ("/s) | Prediction error (km) | Usual mode |
 |---|---|---|---|---|---|---|
@@ -521,136 +176,21 @@ Each regime is described by six numbers. Two are rates, measured two different w
 | HEO | Molniya near apogee | ~39,800 | ~7.8 | ~7.3 | 5 | rate track |
 | Cislunar | Lunar distance | ~384,400 | ~0.55 | ~14.5 | 50 | sidereal |
 
-**LEO and MEO rates (overhead pass).** A satellite in a circular orbit at altitude h moves at
+[Lesson 6](docs/learning/06-orbits-and-angular-rates.md) derives the rates from orbital mechanics. The prediction errors are placeholder assumptions for a reasonably fresh public element set; edit them in `regimes()` in `src/regimes.rs` to match your data.
 
-```
-v = sqrt(mu / (R + h))          mu = 398,600 km^3/s^2 (Earth's gravity), R = 6,378 km
-```
-
-Seen from directly below, its angular rate is speed divided by distance:
-
-```
-omega (rad/s) ~ v / h           x 206,265 for arcsec/s
-```
-
-For 500 km: v = 7.61 km/s, so omega = 7.61 / 500 = 0.0152 rad/s = 3,140 "/s = 0.87 deg/s. An overhead pass is the fastest geometry, which makes it the right worst case for mount and timing requirements. Lower passes are slower. Earth's rotation is ignored here, which is a small error for LEO and roughly 10% for MEO. At these rates the stars' own motion (15"/s) is negligible, so rate vs ground is taken equal to rate vs stars.
-
-**GEO and cislunar rates (from the orbital period).** For distant objects the observer's own motion matters, so the v / h shortcut no longer works. Instead, use the period: an object completing one circle (1,296,000") per period P moves against the stars at
-
-```
-rate vs stars = 1,296,000" / P
-```
-
-GEO: P = one sidereal day (86,164 s), giving 15.04 "/s. The ground rotates at the same rate, so rate vs ground is 0. Cislunar: using the Moon's period (27.32 days) gives about 0.55 "/s against the stars. The ground turns under it at nearly the full 15.04 "/s, leaving about 14.5 "/s vs ground.
-
-**HEO rate (near apogee).** Speed anywhere on an elliptical orbit comes from the vis-viva equation:
-
-```
-v = sqrt( mu x (2/r - 1/a) )
-```
-
-For a Molniya orbit (semi-major axis a = 26,560 km, eccentricity 0.74), apogee is at r = a x (1 + e) = 46,214 km from Earth's center, where v = 1.50 km/s. Divided by the apogee altitude (about 39,800 km) that is about 7.8 "/s against the stars. Rate vs ground is approximated as the difference from the sidereal rate, about 7.3 "/s.
-
-**Prediction errors are assumptions.** The along-track prediction errors (2 km for LEO, MEO and GEO, 5 km for HEO, 50 km for cislunar) are placeholder values for a reasonably fresh public element set. Real errors depend heavily on the catalog source and the age of the prediction. Edit them in `regimes()` in `src/regimes.rs` to match your data.
-
-### Telescope checks
-
-**Acquisition field (graded).** Will the target land in the field when the telescope points at the predicted position?
-
-```
-prediction error (") = prediction error (km) / range (km) x 206,265
-needed (")           = prediction error + mount pointing error
-margin               = (short side of the field / 2) / needed
-```
-
-The short side is used because the error can lie in any direction. Mount pointing error comes from the mount input, or 60" RMS if not entered. PASS if margin >= 2, WARN if >= 1, FAIL below 1.
-
-Example, DeltaRho 350 + IMX455 for LEO: 2 km / 500 km x 206,265 = 825". Add 30" of pointing error for 855". Half the short side is 1.31 deg / 2 = 2,359". Margin = 2,359 / 855 = 2.8x, PASS. A CDK17 with the same camera has a half short side of only 846", margin 0.99, FAIL. **Wide fields matter for LEO because a small along-track error is a large angle at short range.** The same 2 km at GEO range is only 11".
-
-**Field dwell (INFO).** How long an untracked target stays in the field:
-
-```
-dwell (s) = short side of the field (") / rate vs ground ("/s)
-```
-
-For LEO on the DeltaRho 350: 4,716" / 3,140 "/s = 1.5 s. This matters for a "stare and catch" approach, where the telescope waits for a satellite to cross. A GEO target never leaves a stopped telescope's field.
-
-**Depth relevance (INFO).** Reports the effective collecting area and depth vs the reference, plus what usually limits detection in the regime. LEO targets are usually bright, so tracking and timing dominate. GEO and especially cislunar targets are faint, so collecting area and search speed dominate. This tool does not compute an absolute limiting magnitude (see [limitations](#assumptions-and-limitations)).
-
-### Camera checks
-
-**Timestamp accuracy (graded).** Is each image timestamped accurately enough that timing error doesn't dominate the measured position?
-
-```
-required timing (s) = 0.25 x binned plate scale (") / rate vs stars ("/s)
-position error (")  = rate vs stars x timestamp accuracy
-```
-
-The budget is a quarter of a binned pixel of target motion. PASS if the entered accuracy meets the requirement. WARN if within 4x. FAIL beyond that.
-
-| Regime | Required timing (DeltaRho 350, 1.48 "/px binned) |
-|---|---|
-| LEO | 0.12 ms |
-| MEO | 9.3 ms |
-| GEO | 24.6 ms |
-| HEO | 48 ms |
-| Cislunar | 670 ms |
-
-A PC clock with USB latency (tens of ms) is borderline even for GEO and hopeless for LEO. LEO needs GPS hardware timestamping.
-
-**Shutter skew (graded).** How far does the target move against the stars while a rolling-shutter sensor reads from top to bottom?
-
-```
-readout time (s) = rows x line time
-skew (")         = rate vs stars x readout time
-```
-
-PASS for a global shutter, or if the skew is under 0.25 binned pixel. WARN if larger but under 10% of the frame height: correctable, but the software must timestamp each row separately (t = t_first_row + row x line time). FAIL above 10% of the frame height, where the frame geometry is badly distorted and a global-shutter camera or a small region-of-interest readout is the better answer. WARN if the line time is unknown.
-
-Example with the IMX455 (6,388 rows x 39.028 us = 0.249 s readout):
-
-| Regime | Skew | DeltaRho 350 frame height (4,716") | Status |
+| Component | Check | Graded | Lesson |
 |---|---|---|---|
-| LEO | 783" | 16.6% | FAIL |
-| MEO | 9.9" | 0.2% | WARN (correctable) |
-| GEO | 3.75" | 0.1% | WARN (correctable) |
-| Cislunar | 0.14" | negligible | PASS |
-
-**Exposure vs trailing (INFO).** How long can an exposure be before relative motion smears something?
-
-```
-crossing time (s)     = seeing FWHM (") / rate vs stars ("/s)
-streak per second (px) = rate vs stars / binned plate scale
-```
-
-The target and the stars move relative to each other, so one of them always smears in long exposures: the target if the mount follows the stars, the stars if the mount follows the target. For LEO the crossing time is under a millisecond (2.5 / 3,140 = 0.8 ms), which is why LEO observing means rate tracking with streaked stars. For cislunar it is about 4.5 s.
-
-### Mount checks
-
-**Tracking rate (graded).** Can the mount move as fast as the target?
-
-```
-required rate (deg/s) = rate vs ground / 3600
-headroom              = mount maximum axis rate / required rate
-```
-
-PASS if headroom >= 3x (margin for acceleration and corrections), WARN if >= 1x, FAIL below. In stare mode (GEO) the mount only has to point and hold, so it passes. If the mount's slew rate is unknown, the result is WARN when the required rate is significant (above 0.1 deg/s, which in practice means LEO), otherwise INFO.
-
-**Alt-az zenith keyhole.** For an alt-azimuth mount, a pass that goes nearly overhead forces the azimuth axis to swing around quickly. Near the zenith the sky is locally flat, so for a target moving at angular rate omega and passing at a closest zenith distance z (in radians), the peak azimuth rate is about
-
-```
-azimuth rate ~ omega / z
-```
-
-Setting the azimuth rate equal to the mount's maximum gives the closest followable zenith distance, z = omega / max rate, and therefore the highest followable pass:
-
-```
-highest pass elevation (deg) = 90 - degrees(omega / max axis rate)
-```
-
-Example, LEO on a PlaneWave L-350 (50 deg/s): z = 0.87 / 50 rad = 1.0 deg, so passes up to 89 deg elevation can be followed. A mount limited to 3 deg/s could only follow passes up to about 73 deg. PASS if >= 85 deg, WARN if >= 70 deg, FAIL below. For equatorial mounts the keyhole is near the celestial pole and is noted but not graded. Acceleration limits are not modeled (see limitations).
-
-**Non-sidereal tracking (graded where required).** Rate tracking needs the mount's control software to follow a predicted path, for example from a TLE. LEO, MEO and HEO require it. PASS if supported, FAIL if not, WARN if unknown (ask the vendor). For GEO (stare) and cislunar (sidereal is usually adequate) it is reported as INFO.
+| Telescope | Acquisition field: does half the field's short side cover prediction error plus mount pointing error? | PASS / WARN / FAIL | [6](docs/learning/06-orbits-and-angular-rates.md) |
+| Telescope | Field dwell: how long an untracked target stays in the field | INFO | [6](docs/learning/06-orbits-and-angular-rates.md) |
+| Telescope | Depth relevance: area and depth vs reference, and what limits the regime | INFO | [6](docs/learning/06-orbits-and-angular-rates.md) |
+| Camera | Timestamp accuracy: is the timing error under a quarter binned pixel of motion? | PASS / WARN / FAIL | [7](docs/learning/07-timing-and-shutters.md) |
+| Camera | Shutter skew: how far the target moves during a rolling-shutter readout | PASS / WARN / FAIL | [7](docs/learning/07-timing-and-shutters.md) |
+| Camera | Exposure vs trailing: how long before the target or the stars smear | INFO | [7](docs/learning/07-timing-and-shutters.md) |
+| Mount | Tracking rate and keyhole: axis-rate headroom, and the highest pass an alt-az mount can follow | PASS / WARN / FAIL | [8](docs/learning/08-mount-dynamics.md) |
+| Mount | Acceleration: peak tracking acceleration and the acceleration-limited keyhole | PASS / WARN / FAIL | [8](docs/learning/08-mount-dynamics.md) |
+| Mount | Slew and settle: time to get on target vs the regime's usable window | PASS / WARN / FAIL for LEO, INFO elsewhere | [8](docs/learning/08-mount-dynamics.md) |
+| Mount | Non-sidereal tracking: can the control software follow a TLE? | Graded where the regime requires it | [8](docs/learning/08-mount-dynamics.md) |
+| System | Detection: SNR and limiting magnitude for a representative target | PASS / WARN / FAIL | [9](docs/learning/09-brightness-and-detection.md) |
 
 ### Reading the regime results
 
@@ -670,143 +210,9 @@ This is the demo's DeltaRho 350 + IMX455 on an L-350 with GPS timestamps. Readin
 
 The System column is WARN in every regime, and that is not a finding about the hardware. The demo enters no quantum efficiency, throughput, sky brightness or read noise, so the detection check substitutes generic defaults and refuses to grade a PASS on them. Enter real values and the column grades normally.
 
----
-
-## Mount acceleration
-
-### Peak tracking acceleration
-
-An overhead pass has `theta(t) = atan(v t / h)`. Differentiating twice, with `u = v t / h`:
-
-```
-theta'  = (v/h) / (1 + u^2)
-theta'' = -2 (v/h)^2 u / (1 + u^2)^2
-```
-
-`|theta''|` peaks at `u = 1/sqrt(3)`, which gives
-
-```
-peak acceleration = PEAK_ACCEL_COEFF x omega^2,   PEAK_ACCEL_COEFF = 3 sqrt(3) / 8 = 0.6495
-```
-
-where `omega = v/h` is the peak rate. This is a derived constant, not a tuned threshold.
-
-For the LEO regime, `omega = 0.87234 deg/s`, so the peak tracking acceleration is **0.008627 deg/s^2**. That is negligible for any mount in the preset list, and it is why the acceleration model does not stop here: compared against a spec sheet, this check would pass unconditionally and tell you nothing. The equivalent MEO figure is 1.37e-6 deg/s^2, nearly four orders smaller, because the requirement scales as `omega^2`. `ACCEL_MATTERS_DEG_S2` is set at 0.005 so that LEO alone trips the "ask the vendor" branch when a rating is missing.
-
-### The acceleration-limited keyhole
-
-Acceleration bites where the azimuth axis has to whip around near the zenith. There the azimuth angle sweeps through the same `atan` form as the pass itself, with the minimum zenith distance `z` in place of the altitude, so peak azimuth acceleration is `PEAK_ACCEL_COEFF x (omega/z)^2`. Requiring that to stay inside the mount's rating gives
-
-```
-z >= omega x sqrt(PEAK_ACCEL_COEFF / max acceleration)
-```
-
-The rate limit already gave `z >= omega / max rate`. These are two constraints on one physical keyhole, so the tool reports whichever binds and names which one it was:
-
-| Mount acceleration | Accel-limited keyhole | Rate-limited (50 deg/s) | Binding |
-|---|---|---|---|
-| 10 deg/s^2 | 88.3 deg elevation | 89.0 deg elevation | acceleration |
-| 2 deg/s^2 | 86.2 deg elevation | 89.0 deg elevation | acceleration |
-| 0.5 deg/s^2 | 82.5 deg elevation (WARN) | 89.0 deg elevation | acceleration |
-
-Acceleration binds in every realistic case, and by 0.5 deg/s^2 it has pushed the keyhole below `KEYHOLE_WARN_ELEV_DEG`. **When a mount publishes no acceleration figure the reported keyhole is the rate-only number, exactly as before this model existed.** None of the presets publish one, so none of their keyhole figures moved.
-
-### Slew and settle
-
-Getting on target is a trapezoidal move: accelerate to the rate limit, cruise, decelerate. If the distance is too short to reach the rate limit the profile is triangular instead.
-
-```
-trapezoidal (D >= v^2/a):  t = v/a + D/v
-triangular  (D <  v^2/a):  t = 2 sqrt(D/a)
-```
-
-Both branches agree at `D = v^2/a`, so the reported time cannot jump for a small change in the assumed distance.
-
-| Distance | Max rate | Max acceleration | Profile | Time |
-|---|---|---|---|---|
-| 90 deg | 50 deg/s | 10 deg/s^2 | triangular | 6.0 s |
-| 90 deg | 50 deg/s | 50 deg/s^2 | trapezoidal | 2.8 s |
-| 90 deg | 6 deg/s | 1 deg/s^2 | trapezoidal | 21.0 s |
-
-Slew plus settle is then graded against the regime's usable window. Only LEO has one (300 s, roughly how long a 500 km pass stays above useful elevation); every other regime stays available for hours, so the check reports INFO there. A direct-drive mount needs 6 s of slew and 2 s of settle, under 3% of a LEO pass. If the acceleration rating is missing but the slew rate is known, the tool still reports `D / v` as an explicit lower bound rather than giving up.
+Choose **Show detailed orbital-regime evaluation** in the menu, or run `--demo`, to see every regime check with its numbers.
 
 ---
-
-## Target brightness and detection
-
-### How bright the target is
-
-For a diffuse (Lambertian) target, the apparent magnitude follows from its cross-section, albedo, range and phase. The `1/pi` is the Lambertian scattering factor:
-
-```
-m = -26.74 - 2.5 x log10(albedo x area x phase / (pi x d^2))
-```
-
-with the area in square metres and the range in metres. The tool assumes one representative target, a 10 m^2 object at 0.2 albedo at full phase, so magnitudes differ between regimes only through range: the same object, moved further away.
-
-| Regime | Range | Derived magnitude |
-|---|---|---|
-| LEO | 500 km | 2.25 |
-| MEO | 20,200 km | 10.28 |
-| GEO | 37,000 km | 11.59 |
-| HEO | 39,836 km | 11.75 |
-| Cislunar | 384,400 km | 16.67 |
-
-The check on the absolute scale is that these land where real objects do: GEO objects run 11 to 15, cislunar 16 to 20. You can override the magnitude with your own figure.
-
-### Signal, sky and trailing
-
-A magnitude-zero source delivers about `8.9e9` photons per square metre per second in V band. (From the V-band zero point 3.64e-23 W/m^2/Hz over a 550 nm band 89 nm wide, giving 3.21e-9 W/m^2, divided by the 3.61e-19 J energy of a 550 nm photon.) So:
-
-```
-signal (e-/s)      = 8.9e9 x 10^(-0.4 m) x effective area x QE x throughput
-sky (e-/px/s)      = the same, at the sky magnitude, x plate scale^2
-```
-
-The sky term is just the point-source rate for that surface brightness scaled by the solid angle one pixel covers.
-
-Exposure is not a separate input. A target the mount holds still does not trail, so nothing bounds the exposure but a 30 s cap. A target tracked sidereally drifts at its rate against the stars, and the natural exposure is the one that keeps its trail inside a single seeing disk:
-
-```
-exposure = seeing / residual rate     (capped at MAX_EXPOSURE_S = 30 s)
-trail    = residual rate x exposure
-footprint (px) = (seeing / scale) x ((seeing + trail) / scale)
-```
-
-For cislunar at 2.5" seeing: the Moon's rate against the stars is 0.549"/s, so the exposure is 2.5 / 0.549 = **4.554 s**, the trail is 2.5" by construction, and the footprint is 2.5 x 5.0 / 0.7386^2 = **22.914 px**. You can override the exposure; if your choice trails the target off the sensor, the tool says so and will not report a PASS.
-
-### Signal-to-noise and limiting magnitude
-
-```
-SNR = S / sqrt(S + B + R^2 x n)
-```
-
-The signal appears inside the noise term because photon arrival is Poisson: its own shot noise is `sqrt(S)`.
-
-Setting `SNR = T` and solving for the signal gives a quadratic with one positive root, so the faintest detectable magnitude needs no search:
-
-```
-S_min = (T^2 + sqrt(T^4 + 4 T^2 N)) / 2,    N = B + R^2 x n
-m_limit = -2.5 x log10(S_min / K),          K = 8.9e9 x area x QE x throughput x exposure
-```
-
-For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21.0 mag/arcsec^2 sky, QE 0.80, throughput 0.85 and 3 e- read noise:
-
-| Regime | Mode | Exposure | Target mag | SNR | Limiting mag | Margin | Verdict |
-|---|---|---|---|---|---|---|---|
-| LEO | rate-track | 30 s (capped) | 2.25 | ~38,900 | 20.06 | +17.8 | trivial |
-| MEO | rate-track | 30 s (capped) | 10.28 | 964 | 20.06 | +9.8 | trivial |
-| GEO | stare | 30 s (capped) | 11.59 | 526 | 20.06 | +8.5 | trivial |
-| HEO | rate-track | 30 s (capped) | 11.75 | 488 | 20.06 | +8.3 | trivial |
-| Cislunar | sidereal | 4.554 s (trail-limited) | 16.67 | 14.9 | 18.15 | +1.5 | graded |
-
-Two things in that table are worth reading twice.
-
-The limiting magnitude is **identical at 20.06 for all four stationary-target regimes**. That is not a coincidence: they share an exposure (the 30 s cap), a zero trail, and therefore the same footprint and noise budget. They differ only in how bright the target is.
-
-And four of the five regimes sit above `SNR_TRIVIAL`, so the tool reports "detection is not the limiting factor" instead of a graded margin. That is the right answer rather than a mis-set threshold: a 14-inch aperture at 30 seconds genuinely does not struggle with anything nearer than the Moon. Cislunar is the only regime where detection is close, and it is the only regime whose limiting factor reads "brightness above all". The model reproduces the tool's own editorial judgment from computed numbers.
-
-Where the brightness figures come from generic defaults rather than entered values, the check is capped at WARN and names what it assumed. It will not tell you a configuration will detect something on the strength of a quantum efficiency it invented.
 
 ## Pass prediction
 
@@ -835,7 +241,7 @@ Example, the what-if orbit 550 km at 53 degrees from 40 N 75 W with a PlaneWave 
 * **Mount N** compares the pass's peak axis rate and acceleration with the mount's ratings, using the thresholds of the regime mount checks (`RATE_PASS_HEADROOM`, `ACCEL_PASS_HEADROOM` and the rest in `src/constants.rs`). The note names the axis and quantity that bind and their headroom. An equatorial mount is judged on its hour-angle and declination axes. A rating that is unknown gives WARN when the pass needs real speed and INFO when it doesn't.
 * `<` before a rise time means the satellite was already up when the window started; `>` after a set time means it was still up when the window ended.
 
-The geometry comes from the `orbit-prop` library in `crates/orbit-prop`, whose README documents its models, accuracy and limits.
+The geometry comes from the `orbit-prop` library in `crates/orbit-prop`, whose README documents its models, accuracy and limits. [Lesson 10](docs/learning/10-pass-prediction.md) explains TLEs, SGP4, J2 drift, the reference frames, the pass search and the lighting model.
 
 ## The comparison table
 
@@ -901,7 +307,7 @@ In the demo, the RASA 11 is the fastest searcher, the DeltaRho 350 balances dept
 
 ## Thresholds and how to tune them
 
-All judgment thresholds live in `src/constants.rs`, separated into general-check and orbital-regime groups.
+All judgment thresholds live in `src/constants.rs`, in the `checks_limits` and `regimes_limits` modules. [Lesson 11](docs/learning/11-how-the-tool-judges.md) explains which constants are physics and which are rules of thumb.
 
 | Constant | Default | Check | Meaning |
 |---|---|---|---|
@@ -920,7 +326,7 @@ All judgment thresholds live in `src/constants.rs`, separated into general-check
 | `PAYLOAD_PASS_FRACTION` | 0.70 | 8 | Max load fraction for PASS |
 | `PAYLOAD_WARN_FRACTION` | 0.90 | 8 | Max load fraction for WARN |
 
-Orbital-regime thresholds live in the `limits` module of `src/regimes.rs`:
+Orbital-regime thresholds are in the `regimes_limits` module:
 
 | Constant | Default | Component | Meaning |
 |---|---|---|---|
@@ -945,7 +351,7 @@ A `plausible_ranges` module sets the bounds outside which a hand-entered value i
 
 `DEFAULT_POINTING_RMS_ARCSEC` (60") in the same file is the pointing error assumed when a mount's figure isn't entered. The regime parameters themselves (ranges, rates, prediction errors) are in `regimes()`.
 
-The default seeing (2.5") and reference wavelength (0.55 um, green light near the eye's and many sensors' peak sensitivity) are constants at the top of `src/main.rs`.
+The default seeing (`DEFAULT_SEEING_ARCSEC`, 2.5") and reference wavelength (`DEFAULT_WAVELENGTH_UM`, 0.55 um, green light near the eye's and many sensors' peak sensitivity) are in `src/constants.rs` too.
 
 ---
 
@@ -1051,6 +457,7 @@ src/
   passes_report.rs  pass table and the per-pass "Mount can follow?" judgment
   input.rs     validated terminal input helpers
 crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geometry, lighting, pass finding
+docs/learning/      lessons on the concepts, plus check_examples.py, an independent check of every worked example
 ```
 
 **Design notes**
@@ -1071,7 +478,7 @@ crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geome
 
 **Adding a regime check.** Write a function returning a `RegimeCheck` tagged with its `Component`, and add it to the list in `evaluate_regimes`. Component and overall statuses are recomputed automatically.
 
-**Tests.** `cargo test` runs the worked examples from this README: plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement. It also runs the `orbit-prop` tests, which check the library against published references: Vallado's GMST, site-vector and SGP4 verification cases, and Meeus's Sun and Moon examples.
+**Tests.** `cargo test` runs the worked examples from the [lessons](docs/learning/README.md): plate scale, field of view, effective area and depth, by-area versus by-diameter obstruction, CFZ, ideal pixel, best bin, spot interpolation, rolling-shutter skew, LEO and MEO overhead rates, GEO and lunar rates from period, Molniya apogee rate, the L-350 keyhole and the GEO timing requirement. It also runs the `orbit-prop` tests, which check the library against published references: Vallado's GMST, site-vector and SGP4 verification cases, and Meeus's Sun and Moon examples.
 
 ---
 
