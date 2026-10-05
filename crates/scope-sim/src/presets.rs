@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn reads_scope_evals_presets_file() {
         let p = Presets::from_yaml(YAML).unwrap();
-        assert_eq!(p.telescopes.len(), 5);
+        assert_eq!(p.telescopes.len(), 23);
         assert_eq!(p.cameras.len(), 4);
         assert!(p.mounts.len() >= 3);
     }

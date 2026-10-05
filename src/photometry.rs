@@ -339,7 +339,7 @@ mod tests {
             aperture_mm: 350.0,
             focal_length_mm: 1050.0,
             obstruction: Obstruction::ByDiameter(0.56),
-            image_circle_mm: 60.0,
+            image_circle_mm: Some(60.0),
             back_focus_mm: None,
             weight_lb: None,
             throughput: None,

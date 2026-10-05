@@ -75,7 +75,7 @@ pub(crate) struct TelescopeDto {
     aperture_mm: f64,
     focal_length_mm: f64,
     obstruction: ObstructionDto,
-    image_circle_mm: f64,
+    image_circle_mm: Option<f64>,
     back_focus_mm: Option<f64>,
     weight_lb: Option<f64>,
     #[serde(default)]
