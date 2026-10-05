@@ -5,10 +5,10 @@
 ## Layout
 
 ```
-Cargo.toml     workspace: scope-eval (this directory) and crates/orbit-prop
+Cargo.toml     workspace: scope-eval (this directory), crates/orbit-prop, crates/scope-sim and crates/scope-sim-wasm
 presets.yaml   built-in telescopes, cameras and mounts, each with its source
 src/
-  main.rs      command-line entry point, interactive menus, pass-prediction prompts, --demo, --help
+  lib.rs       the scope_eval library: everything below except cli/ and main.rs
   model/       data types: Telescope, Camera, Mount, Site, Payload, Config, Obstruction, SpotSpec,
                plus the *_dto.rs wire formats that presets.yaml is parsed into
   calculations/
@@ -21,11 +21,24 @@ src/
   checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
   photometry.rs  photometric inputs with defaults substituted, and which defaults were assumed
+  passes.rs    orbit source to propagator, stale-TLE note, per-pass "Mount can follow?" judgment
   presets.rs   loads presets.yaml
-  report.rs    printing evaluations, regime summaries and details, comparison tables, formula summary
-  passes_report.rs  pass table and the per-pass "Mount can follow?" judgment
-  input.rs     validated terminal input helpers
+  report/      the text reports, as Display types; nothing here prints
+    evaluation.rs      one configuration: the eight checks, GEO timing, regime summary
+    comparison.rs      the side-by-side comparison tables
+    regime_details.rs  every regime check with its numbers
+    passes.rs          the pass table
+    formulas.rs        the formula summary
+  main.rs      the scope-eval binary: arguments, --help, and dispatch to cli/
+  cli/         the command-line front end; the only code that reads input or prints
+    interactive.rs     the main menu loop and pass prediction
+    prompts.rs         prompts that build configurations, sites and orbits
+    demo.rs            --demo
+    input.rs           validated terminal input helpers
 crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geometry, lighting, pass finding
+crates/scope-sim/   time-stepped simulation of a mount tracking a pass, with pointing error
+crates/scope-sim-wasm/  WebAssembly bindings for scope-sim
+dashboard/          React + Material UI dashboard that runs and visualizes the simulation
 ```
 
 ## Where each docs page lives in the code
@@ -37,11 +50,12 @@ crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geome
 | [8](08-orbital-regimes.md) | `calculations/orbit.rs`, `calculations/camera.rs` | `regimes.rs` |
 | [9](09-mount-dynamics.md) | `calculations/mount.rs` (`MountDynamicsCalculator`) | `regimes.rs` |
 | [10](10-target-brightness-and-detection.md) | `calculations/detection.rs`, `photometry.rs` | `regimes.rs` (`system_detection`) |
-| [11](11-pass-prediction.md) | `crates/orbit-prop` | `passes_report.rs` |
+| [11](11-pass-prediction.md) | `crates/orbit-prop` | `passes.rs` (judgment), `report/passes.rs` (table) |
 | [13](13-thresholds.md) | | `constants.rs` |
 
 ## Design notes
 
+* The code is layered. The `scope_eval` library (`src/lib.rs`) holds the model, the physics, the judgments and the report text, and never reads input or prints. Reports are `Display` types such as `EvaluationReport` and `ComparisonReport`, so any front end can call `.to_string()` on them. The binary (`src/main.rs` and `src/cli/`) only parses arguments, prompts, and prints those reports.
 * Each `calculations/` module groups related equations in a small calculator type. For example, `OpticsCalculator` contains plate-scale and field-of-view equations, while `MountDynamicsCalculator` contains tracking and slew equations. Calculator methods are pure and covered by worked-example tests.
 * The calculators contain physics and math only. `checks.rs` and `regimes.rs` apply engineering thresholds to those results and return human-readable check results ([page 4](04-how-an-evaluation-works.md#physics-versus-judgment)).
 * Each general `check_*` function returns a `CheckResult` (status, detail lines, verdict) and is independent of how results are displayed.

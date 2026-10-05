@@ -70,7 +70,7 @@ The first three rows should match the example. (If you change the preset lists, 
 
 | Concept | Command |
 |---|---|
-| Per-pass mount judgment (headroom, binding axis, unknown ratings) | `cargo test --bin scope-eval passes_report` |
+| Per-pass mount judgment (headroom, binding axis, unknown ratings) | `cargo test --lib passes::` |
 | Equatorial mounts use hour-angle and declination axes | `cargo test equatorial_mount_uses_hour_angle` |
 | Stale-TLE warning across the whole window | `cargo test stale_tle` and `cargo test long_search_from_a_fresh_tle` |
 | The orbit-prop library against published references | `cargo test -p orbit-prop` |

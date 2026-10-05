@@ -1,16 +1,60 @@
-//! Pass-prediction table and the per-pass "Mount can follow?" judgment.
+//! Pass prediction for the CLI: turning an orbit source into a propagator,
+//! and judging whether a mount can follow each pass.
 //!
-//! The geometry comes from the `orbit-prop` library. This module only
-//! applies the mount thresholds already used by the regime checks and
-//! prints the result.
+//! The geometry comes from the `orbit-prop` library. This module applies
+//! the mount thresholds already used by the regime checks; rendering the
+//! pass table is `report::passes`.
 
-use orbit_prop::{Epoch, Pass, PassDarkness, PassLighting, PassResult};
+use orbit_prop::{Epoch, KeplerElements, KeplerJ2, OrbitPropError, Pass, Propagator, Sgp4Propagator, Tle};
 
 use crate::checks::Status;
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::regimes_limits as limits;
 use crate::constants::STALE_TLE_DAYS;
-use crate::model::{plausible, Config, Mount, MountType};
+use crate::model::{plausible, Mount, MountType};
+
+/// Where an orbit comes from. A what-if orbit with no epoch takes the
+/// search start as its epoch.
+pub enum OrbitSource {
+    Tle(Tle),
+    WhatIf {
+        perigee_km: f64,
+        apogee_km: f64,
+        i_deg: f64,
+        raan_deg: f64,
+        argp_deg: f64,
+        mean_anomaly_deg: f64,
+        epoch: Option<Epoch>,
+    },
+}
+
+/// A propagator for `source`, plus a note when a TLE is too old for the
+/// search window from `start` to `end`.
+pub fn build_propagator(
+    source: OrbitSource,
+    start: Epoch,
+    end: Epoch,
+) -> Result<(Box<dyn Propagator>, Option<String>), OrbitPropError> {
+    match source {
+        OrbitSource::Tle(tle) => {
+            let note = stale_tle_note(&tle.epoch, &start, &end);
+            Ok((Box::new(Sgp4Propagator::new(&tle)?), note))
+        }
+        OrbitSource::WhatIf { perigee_km, apogee_km, i_deg, raan_deg, argp_deg, mean_anomaly_deg, epoch } => {
+            let el = KeplerElements::from_altitudes(
+                epoch.unwrap_or(start),
+                perigee_km,
+                apogee_km,
+                i_deg,
+                raan_deg,
+                argp_deg,
+                mean_anomaly_deg,
+            )?;
+            let label = format!("what-if orbit {perigee_km:.0} x {apogee_km:.0} km, {i_deg:.1} deg");
+            Ok((Box::new(KeplerJ2::new(el, &label)?), None))
+        }
+    }
+}
 
 /// One axis requirement: the axis name and the pass's peak value on it.
 struct AxisNeed {
@@ -105,99 +149,11 @@ pub fn stale_tle_note(tle_epoch: &Epoch, start: &Epoch, end: &Epoch) -> Option<S
     })
 }
 
-fn lighting_text(l: PassLighting) -> &'static str {
-    match l {
-        PassLighting::Sunlit => "yes",
-        PassLighting::Partial => "partial",
-        PassLighting::Eclipsed => "no",
-    }
-}
-
-fn dark_text(d: PassDarkness) -> &'static str {
-    match d {
-        PassDarkness::Dark => "yes",
-        PassDarkness::Partial => "twilight",
-        PassDarkness::Daylight => "no",
-    }
-}
-
-fn hms(t: &Epoch) -> String {
-    let u = t.to_utc();
-    format!("{:02}:{:02}:{:02}", u.hour, u.minute, u.second.floor() as u32)
-}
-
-fn date_hms(t: &Epoch) -> String {
-    let u = t.to_utc();
-    format!("{:04}-{:02}-{:02} {}", u.year, u.month, u.day, hms(t))
-}
-
-fn duration_text(seconds: f64) -> String {
-    let s = seconds.round() as u64;
-    if s >= 3600 {
-        format!("{}h{:02}m", s / 3600, s % 3600 / 60)
-    } else {
-        format!("{}m{:02}s", s / 60, s % 60)
-    }
-}
-
-/// Print the pass table. One "Mount can follow?" column is added for each
-/// evaluated configuration that has a mount.
-pub fn print_passes(label: &str, result: &PassResult, configs: &[Config]) {
-    let mounted: Vec<(&str, &Mount)> =
-        configs.iter().filter_map(|c| c.payload.mount.as_ref().map(|m| (c.label.as_str(), m))).collect();
-    println!("\n==========================================================================");
-    println!(" Passes of {label}");
-    println!("==========================================================================");
-    if result.passes.is_empty() {
-        println!(" No passes in this window.");
-    } else {
-        print!(" #  Rise (UTC)            Set (UTC)  Duration MaxEl  Az rate El rate Sunlit  Dark    ");
-        for (i, _) in mounted.iter().enumerate() {
-            print!(" | {:<22}", format!("Mount {}", i + 1));
-        }
-        println!();
-        for (n, p) in result.passes.iter().enumerate() {
-            let start_mark = if p.clipped_start { "<" } else { " " };
-            let end_mark = if p.clipped_end { ">" } else { " " };
-            print!(
-                "{:>2} {start_mark}{} {}{end_mark} {:>8} {:>5.1} {:>7.3} {:>7.3} {:<7} {:<8}",
-                n + 1,
-                date_hms(&p.rise),
-                hms(&p.set),
-                duration_text(p.duration_s()),
-                p.max_el_deg,
-                p.peak_az_rate_deg_s,
-                p.peak_el_rate_deg_s,
-                lighting_text(p.lighting),
-                dark_text(p.site_dark),
-            );
-            for (_, m) in &mounted {
-                let (status, note) = judge_mount_for_pass(m, p);
-                print!(" | {} {:<15}", status.tag(), note);
-            }
-            println!();
-        }
-        println!("\n Rates are peak axis rates in deg/s for an alt-az mount. '<' = already up at");
-        println!(" the start of the window, '>' = still up at the end. Sunlit: is the satellite");
-        println!(" in sunlight. Dark: is the Sun more than 12 deg below the site's horizon.");
-        if !mounted.is_empty() {
-            println!("\n Mount columns compare the pass's peak axis rate and acceleration with the");
-            println!(" mount's ratings (PASS at 3x headroom, WARN at 1x, FAIL below; INFO or WARN");
-            println!(" when a rating is unknown). The note names the binding axis and its headroom.");
-            for (i, (cfg_label, m)) in mounted.iter().enumerate() {
-                println!("   Mount {}: {} ({cfg_label})", i + 1, m.name);
-            }
-        }
-    }
-    if let Some(e) = &result.error {
-        println!("\n The search stopped early: {e}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::Capability;
+    use orbit_prop::{PassDarkness, PassLighting};
 
     fn pass(az_rate: f64, el_rate: f64, az_acc: f64, el_acc: f64) -> Pass {
         let t = Epoch::from_utc(2026, 10, 4, 0, 0, 0.0).unwrap();
@@ -313,11 +269,5 @@ mod tests {
         let epoch = Epoch::from_utc(2026, 10, 1, 0, 0, 0.0).unwrap();
         let note = stale_tle_note(&epoch, &epoch, &epoch.add_seconds(30.0 * 86_400.0)).unwrap();
         assert!(note.contains("30 days"), "{note}");
-    }
-
-    #[test]
-    fn duration_formatting() {
-        assert_eq!(duration_text(425.4), "7m05s");
-        assert_eq!(duration_text(6.0 * 3600.0 + 61.0), "6h01m");
     }
 }
