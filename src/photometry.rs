@@ -4,7 +4,7 @@
 //! were assumed. Detection equations live in `calculations::detection`; the
 //! judgments live in `regimes.rs`.
 //!
-//! Formulas and worked examples are in README.md.
+//! Formulas and worked examples are in docs/10-target-brightness-and-detection.md.
 
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::{
@@ -148,7 +148,7 @@ mod tests {
         assert!(close(mag_at(40_000.0) - mag_at(10_000.0), 3.01, 0.01));
     }
 
-    // The worked configuration from README.md: DeltaRho 350 (0.0660 m^2
+    // The worked configuration from the docs: DeltaRho 350 (0.0660 m^2
     // effective area, 0.7386 "/px with 3.76 um pixels), QE 0.80,
     // throughput 0.85, sky 21.0 mag/arcsec^2.
     const AREA: f64 = 0.0660;

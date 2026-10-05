@@ -607,7 +607,7 @@ pub fn evaluate_all(configs: &[Config], site: &Site) -> Vec<Evaluation> {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: the worked examples from README.md
+// Tests: the worked examples from docs/
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {

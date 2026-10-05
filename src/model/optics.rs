@@ -86,7 +86,7 @@ pub struct Telescope {
     pub obstruction: Obstruction,
     /// Diameter of the corrected (sharp, flat) image circle, mm.
     pub image_circle_mm: f64,
-    /// Back focus available, mm (how the vendor measures it varies, see README).
+    /// Back focus available, mm (how the vendor measures it varies, see docs/06-light-field-focus-fit-checks.md).
     pub back_focus_mm: Option<f64>,
     /// Optical tube weight, lb.
     pub weight_lb: Option<f64>,

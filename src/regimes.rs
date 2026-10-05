@@ -7,7 +7,7 @@
 //! configuration can acquire, time-tag and follow that kind of target.
 //!
 //! All regime numbers are representative worst-to-typical cases, documented
-//! in README.md. Change them in `regimes()` to match your own catalog.
+//! in docs/08-orbital-regimes.md. Change them in `regimes()` to match your own catalog.
 
 use crate::checks::{kv, Evaluation, Status};
 use crate::calculations::camera::CameraTimingCalculator;
@@ -899,7 +899,7 @@ mod tests {
     use crate::model::{Mount, Payload};
 
     /// DeltaRho 350 + IMX455 on an L-350, the configuration every worked
-    /// example in README.md uses.
+    /// example in docs/ uses.
     fn fixture(mount: Option<Mount>) -> (Config, Site) {
         let telescope = crate::presets::telescopes()
             .into_iter()
