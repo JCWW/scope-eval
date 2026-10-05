@@ -173,7 +173,7 @@ No configuration wins every column. Before comparing, decide which lessons matte
 
 * `src/checks.rs`: `evaluate` (steps 1 to 4 and 6), `evaluate_all` (the reference rule).
 * `src/regimes.rs`: `evaluate_regimes`, `RegimeEvaluation::component_status`, `RegimeEvaluation::overall`.
-* `src/report.rs`: the printed reports and comparison tables.
+* `src/report/`: the reports and comparison tables, as text. `src/cli/` prints them.
 * `src/constants.rs`: derived constants at the top; modules `checks_limits`, `regimes_limits` and `plausible_ranges`.
 
 **Back to:** [the lesson index](README.md)

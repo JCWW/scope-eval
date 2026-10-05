@@ -194,7 +194,7 @@ For each pass, the tool compares the peak axis rate and acceleration with each m
 * `crates/orbit-prop/src/observe.rs`: analytic axis rates.
 * `crates/orbit-prop/src/passes.rs`: `find_passes`.
 * `crates/orbit-prop/src/illumination.rs` and `sun_moon.rs`: shadow, phase and Sun elevation.
-* `src/passes_report.rs`: the pass table and the per-pass mount judgment.
+* `src/passes.rs`: the per-pass mount judgment. `src/report/passes.rs`: the pass table.
 * [`crates/orbit-prop/README.md`](../../crates/orbit-prop/README.md): the library's models, references, accuracy and known limitations.
 
 **Next:** [Lesson 11: How the tool judges](11-how-the-tool-judges.md)
