@@ -77,10 +77,11 @@ mod tests {
         let cams = cameras();
         let ms = mounts();
         assert!(!scopes.is_empty() && !cams.is_empty() && !ms.is_empty());
-        // presets.yaml carries no vendor QE, throughput or dynamics data, and
+        // presets.yaml carries no vendor QE, full well, throughput or dynamics data, and
         // must not: every value in that file has a `source`.
         assert!(scopes.iter().all(|t| t.throughput.is_none()));
         assert!(cams.iter().all(|c| c.qe.is_none()));
+        assert!(cams.iter().all(|c| c.full_well_e.is_none()));
         assert!(ms.iter().all(|m| m.max_accel_deg_s2.is_none()));
         assert!(ms.iter().all(|m| m.settle_time_s.is_none()));
     }

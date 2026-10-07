@@ -350,6 +350,7 @@ cameras:
     height_px: 6388
     read_noise_e: null
     qe: null
+    full_well_e: null
     shutter: !rolling { line_time_us: 39.028 }
     weight_lb: 2.0
     source: "Line time from the Moravian C3 manual. Weight from QHY600 PRO (915 g). Rolling shutter."
@@ -360,6 +361,7 @@ cameras:
     height_px: 4176
     read_noise_e: null
     qe: null
+    full_well_e: null
     shutter: !rolling { line_time_us: 34.667 }
     weight_lb: null
     source: "Line time from the Moravian C3 manual. Weight not entered."
@@ -370,6 +372,7 @@ cameras:
     height_px: 8750
     read_noise_e: null
     qe: null
+    full_well_e: null
     shutter: !rolling { line_time_us: null }
     weight_lb: null
     source: "Nominal sensor format. Exact active pixel count varies by camera vendor. Line time and weight not entered."
@@ -380,6 +383,7 @@ cameras:
     height_px: 1216
     read_noise_e: null
     qe: null
+    full_well_e: null
     shutter: global
     weight_lb: null
     source: "Nominal sensor format. Small global-shutter sensor often used for LEO timing work."

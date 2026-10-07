@@ -52,8 +52,8 @@ dashboard/          React + Material UI dashboard that runs and visualizes the s
 | [7](07-motion-and-timing.md) | `calculations/camera.rs` | `checks.rs` (`geo_motion_and_timing`, not graded) |
 | [8](08-orbital-regimes.md) | `calculations/orbit.rs`, `calculations/camera.rs` | `regimes.rs` |
 | [9](09-mount-dynamics.md) | `calculations/mount.rs` (`MountDynamicsCalculator`) | `regimes.rs` |
-| [10](10-target-brightness-and-detection.md) | `calculations/detection.rs`, `photometry.rs` | `regimes.rs` (`system_detection`) |
-| [17](17-point-spread-function.md) | `calculations/psf.rs`, `psf.rs` (`PsfBudget`) | `checks.rs` (checks 2 and 3), `regimes.rs` (`system_detection`, `camera_trailing`) |
+| [10](10-target-brightness-and-detection.md) | `calculations/detection.rs`, `photometry.rs` | `regimes.rs` (`system_detection`, `system_saturation`) |
+| [17](17-point-spread-function.md) | `calculations/psf.rs`, `psf.rs` (`PsfBudget`) | `checks.rs` (checks 2 and 3), `regimes.rs` (`system_detection`, `system_saturation`, `camera_trailing`) |
 | [11](11-pass-prediction.md) | `crates/orbit-prop` | `passes.rs` (judgment), `report/passes.rs` (table) |
 | [13](13-thresholds.md) | | `constants.rs` |
 

@@ -34,6 +34,7 @@ Obstruction can be typed as a percent (56) or a decimal (0.56). The tool treats 
 | Sensor width and height | pixels | Camera spec sheet | Checks 1, 6 |
 | Read noise | e- RMS | Camera spec sheet (optional, 3 e- assumed if blank) | Check 2, regime: detection |
 | Quantum efficiency | fraction 0..1 | Camera QE curve (optional, 0.80 assumed if blank) | Regime: detection |
+| Full-well capacity | e- | Camera spec sheet, at the gain you will use (optional, 20,000 e- assumed if blank) | Regime: saturation ([page 10](10-target-brightness-and-detection.md#step-7-saturation)) |
 | Detector MTF at Nyquist | fraction 0..1 | A measured MTF curve, read at half a cycle per pixel (optional; blank counts the pixel aperture only) | Checks 2, 3, regime: detection ([page 17](17-point-spread-function.md)) |
 | Shutter type and line time | rolling/global, us | Camera manual (optional) | Timing reference, regime: camera |
 | Camera weight | lb | Camera spec sheet (optional) | Check 8 |
@@ -62,7 +63,7 @@ Obstruction can be typed as a percent (56) or a decimal (0.56). The tool treats 
 
 ## Values that are range-checked
 
-A hand-entered photometric or dynamics value outside a plausible range is treated as not entered rather than trusted, so a typo degrades the report instead of corrupting it. The ranges are QE and throughput 0.01 to 1.0, sky brightness 15 to 24 mag/arcsec^2, read noise 0.1 to 100 e-, axis acceleration 1e-4 to 1000 deg/s^2, axis rate 1e-3 to 1000 deg/s and settle time 0 to 600 s. NaN and the infinities always fail. The bounds live in the `plausible_ranges` module of `src/constants.rs`.
+A hand-entered photometric or dynamics value outside a plausible range is treated as not entered rather than trusted, so a typo degrades the report instead of corrupting it. The ranges are QE and throughput 0.01 to 1.0, sky brightness 15 to 24 mag/arcsec^2, read noise 0.1 to 100 e-, full well 1,000 to 2,000,000 e-, axis acceleration 1e-4 to 1000 deg/s^2, axis rate 1e-3 to 1000 deg/s and settle time 0 to 600 s. NaN and the infinities always fail. The bounds live in the `plausible_ranges` module of `src/constants.rs`.
 
 ## Check it yourself
 

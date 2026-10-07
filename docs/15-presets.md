@@ -32,7 +32,7 @@ PlaneWave publishes no corrected image circle for the RC20, RC24, RC700 or the I
 
 ## Cameras
 
-No preset carries a quantum efficiency or read-noise figure. Both vary with gain, mode and vendor binning for the same sensor, so entering a single number from a QE curve would be inventing data. The detection check assumes 0.80 and 3 e- and says so. No preset carries a detector MTF either, so the point spread function counts the pixel aperture but no charge diffusion, and the report says so. Enter `mtf_nyquist` from a measured MTF curve if you have one ([page 17](17-point-spread-function.md)).
+No preset carries a quantum efficiency, read-noise or full-well figure. All three vary with gain, mode and vendor binning for the same sensor, so entering a single number would be inventing data. The detection check assumes 0.80 and 3 e-, the saturation check assumes a 20,000 e- well, and both say so. No preset carries a detector MTF either, so the point spread function counts the pixel aperture but no charge diffusion, and the report says so. Enter `mtf_nyquist` from a measured MTF curve if you have one ([page 17](17-point-spread-function.md)).
 
 | Preset | Pixel (um) | Pixels | Shutter | Notes |
 |---|---|---|---|---|

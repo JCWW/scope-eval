@@ -34,8 +34,8 @@ Evaluates a telescope + camera + mount configuration against eight checks:
 Then evaluates the telescope, camera, mount and the configuration as a whole
 against five orbital regimes: LEO, MEO, GEO, HEO (Molniya) and cislunar,
 covering tracking rate, axis acceleration, slew-and-settle timing, timing
-accuracy, shutter skew, acquisition and whether the target is bright enough
-to detect.
+accuracy, shutter skew, acquisition, whether the target is bright enough
+to detect and whether it is so bright it saturates.
 
 The interactive menu can also predict passes of a satellite (from a TLE or
 a what-if orbit) over your site, and judge whether each evaluated mount can

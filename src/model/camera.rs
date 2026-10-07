@@ -20,6 +20,10 @@ pub struct Camera {
     pub read_noise_e: Option<f64>,
     /// Peak quantum efficiency, as a fraction from 0 to 1. `None` means not entered.
     pub qe: Option<f64>,
+    /// Full-well capacity, electrons: the charge a pixel holds before it
+    /// saturates. Depends on the gain mode. `None` means not entered. Used by
+    /// the saturation check in `regimes.rs`.
+    pub full_well_e: Option<f64>,
     /// Measured detector MTF at the Nyquist frequency (half a cycle per
     /// pixel), as a fraction from 0 to 1. It includes the pixel aperture, so
     /// an ideal square pixel reads 2/pi = 0.64 and anything lower is charge
