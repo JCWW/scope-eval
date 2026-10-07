@@ -10,11 +10,13 @@
 //! * `calculations`: the physics, as pure functions
 //! * `checks`, `regimes`, `photometry`, `psf`, `passes`: evaluation, applying the
 //!   PASS/WARN/FAIL rules to the physics
+//! * `equations`: the substituted equations and status rules behind each check
 //! * `report`: turning evaluations into text
 
 pub mod calculations;
 pub mod checks;
 pub mod constants;
+pub mod equations;
 pub mod model;
 pub mod passes;
 pub mod photometry;

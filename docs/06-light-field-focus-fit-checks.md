@@ -55,12 +55,15 @@ Despite being 14 inches against 11, the DeltaRho reaches only about 0.28 magnitu
 
 **Question.** How much sky does each frame cover, and how fast can this configuration survey the sky compared to the reference?
 
-**Step 1: field of view.** The small-angle rule applied to the whole sensor, with 57.2958 converting radians to degrees:
+**Step 1: true field of view.** The angle the sensor subtends on the sky, for each axis. The report gives it two ways:
 
 ```
-FOV (deg)          = sensor size (mm) / FL_mm x 57.2958        (for each axis)
-field area (deg^2) = FOV_width x FOV_height
+method 1, exact:        TFOV (deg) = 2 x atan(sensor size (mm) / (2 x FL_mm)) x 57.2958
+method 2, small-angle:  TFOV (deg) = sensor size (mm) / FL_mm x 57.2958
+field area (deg^2)    = TFOV_width x TFOV_height                (method 2)
 ```
+
+Method 1 is exact for a flat sensor at the focal plane. Method 2 replaces atan(x) with x, which overstates the field by about x^2 / 12 with x = size / FL. The rest of the evaluation uses method 2, and the report prints how far it is from method 1. For the DeltaRho 350 + IMX455 the width is 1.96456 deg exactly and 1.96475 deg by the approximation, 0.0098% apart; even the fast RASA 11 is only 0.03% apart.
 
 **Step 2: etendue.** Multiply how deep each look goes (area) by how much sky each look covers (field):
 

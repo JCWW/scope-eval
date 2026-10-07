@@ -64,6 +64,12 @@ You don't have to take any number in these lessons on trust.
    ```
 
    Each line shows the value it computed next to the value quoted in the lesson, and the script exits with an error if any of them disagree. Edit it to try your own numbers.
+
+   [`check_equations.py`](check_equations.py) does the same for a whole report. Print the report with `--equations` and pipe it in; it recomputes every equation with the values the report substituted:
+
+   ```bash
+   cargo run --release -- --demo --equations | python3 docs/learning/check_equations.py
+   ```
 3. **With the tool's own tests.** Each lesson names the Rust unit tests that assert the same examples. Run a single test by name, for example:
 
    ```bash

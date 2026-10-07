@@ -146,9 +146,19 @@ impl OpticsCalculator {
         2.5 * (area_m2 / reference_area_m2).log10()
     }
 
-    /// Field of view along one sensor axis, degrees (small-angle approximation).
+    /// True field of view along one sensor axis, degrees, by the small-angle
+    /// approximation: s / FL radians. This is the value the rest of the
+    /// evaluation uses; it overstates the exact field by about
+    /// (s / FL)^2 / 12, under 0.05% for any preset.
     pub fn fov_deg(sensor_mm: f64, focal_length_mm: f64) -> f64 {
         sensor_mm / focal_length_mm * DEG_PER_RADIAN
+    }
+
+    /// True field of view along one sensor axis, degrees, exactly:
+    /// 2 atan(s / (2 FL)), the angle the sensor edge subtends through the
+    /// focal point.
+    pub fn fov_exact_deg(sensor_mm: f64, focal_length_mm: f64) -> f64 {
+        2.0 * (sensor_mm / (2.0 * focal_length_mm)).atan() * DEG_PER_RADIAN
     }
 
     /// Rectangular field area, square degrees.
@@ -191,6 +201,20 @@ mod tests {
             1.2509,
             0.0005
         ));
+    }
+
+    #[test]
+    fn true_field_by_both_methods() {
+        // DeltaRho 350 + IMX455 width: 36.006 mm at 1050 mm.
+        let exact = OpticsCalculator::fov_exact_deg(36.006, 1050.0);
+        let small = OpticsCalculator::fov_deg(36.006, 1050.0);
+        assert!(close(exact, 1.964_562, 1e-6), "{exact}");
+        assert!(close(small, 1.964_754, 1e-6), "{small}");
+        // The small-angle value is always the larger, by about x^2 / 12 with x = s / FL.
+        let x: f64 = 36.006 / 1050.0;
+        assert!(close(small / exact - 1.0, x * x / 12.0, 1e-7));
+        // Exact at a wide angle: a sensor as wide as the focal length subtends 2 atan(1/2).
+        assert!(close(OpticsCalculator::fov_exact_deg(100.0, 100.0), 53.130_102, 1e-6));
     }
 
     #[test]

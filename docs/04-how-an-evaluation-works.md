@@ -71,7 +71,7 @@ The code keeps two concerns apart, and it helps to keep them apart when reading 
 * **Calculations** (`src/calculations/`) contain physics and math only: plate scale, rates, signal-to-noise. Every page shows these as formulas you can redo by hand.
 * **Judgments** (`src/checks.rs`, `src/regimes.rs`) compare those numbers with thresholds and write the verdict.
 
-If you disagree with a verdict, the question is usually whether the threshold suits your mission, not whether the arithmetic is right.
+If you disagree with a verdict, the question is usually whether the threshold suits your mission, not whether the arithmetic is right. Run with `--equations` (or choose **Report style** in the menu) to see both under every check: the equations with the values substituted, then a `Rule:` line naming the threshold bands and which one the result fell in.
 
 ## Check it yourself
 

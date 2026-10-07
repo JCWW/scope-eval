@@ -7,9 +7,10 @@ use crate::calculations::camera::CameraTimingCalculator;
 use crate::calculations::mount::PayloadCalculator;
 use crate::calculations::optics::OpticsCalculator;
 use crate::constants::{
-    checks_limits as limits, ARCMIN_PER_DEGREE, KG_PER_LB, SIDEREAL_RATE_ARCSEC_PER_S,
-    TIMING_ERROR_EXAMPLE_S,
+    checks_limits as limits, ARCMIN_PER_DEGREE, ARCSEC_PER_RADIAN, FWHM_PER_RMS_RADIUS,
+    KG_PER_LB, SIDEREAL_RATE_ARCSEC_PER_S, TIMING_ERROR_EXAMPLE_S,
 };
+use crate::equations::{deg_per_rad, eq, num, rule, short};
 use crate::model::{Camera, Config, Shutter, Site, SpotConvention, Telescope};
 use crate::psf::{FieldPoint, PsfBudget};
 use crate::regimes::{evaluate_regimes, RegimeEvaluation};
@@ -36,6 +37,16 @@ impl Status {
             Status::Fail => "[FAIL]",
         }
     }
+
+    /// The status as a word, as the equation rules print it.
+    pub fn word(&self) -> &'static str {
+        match self {
+            Status::Info => "INFO",
+            Status::Pass => "PASS",
+            Status::Warn => "WARN",
+            Status::Fail => "FAIL",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +55,9 @@ pub struct CheckResult {
     pub title: &'static str,
     pub status: Status,
     pub details: Vec<String>,
+    /// The equations behind the details, values substituted, ending with the
+    /// rule that set the status (see `equations.rs`).
+    pub equations: Vec<String>,
     pub verdict: String,
 }
 
@@ -108,7 +122,18 @@ pub(crate) fn kv(label: &str, value: String) -> String {
 /// Check 1: does the whole sensor fit inside the corrected image circle?
 pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
     let diag = c.diagonal_mm();
+    let (w, h) = (c.width_mm(), c.height_mm());
+    let mut equations = vec![
+        eq(
+            "Sensor size",
+            "pixels x pixel (um) / 1000",
+            format!("{} x {} / 1000, {} x {} / 1000", c.width_px, num(c.pixel_um), c.height_px, num(c.pixel_um)),
+            format!("{} x {} mm", num(w), num(h)),
+        ),
+        eq("Sensor diagonal", "sqrt(w^2 + h^2)", format!("sqrt({}^2 + {}^2)", num(w), num(h)), format!("{} mm", num(diag))),
+    ];
     let Some(ic) = t.image_circle_mm else {
+        equations.push(rule("WARN when no image circle is published".into(), "image circle unknown".into(), Status::Warn));
         let details = vec![
             kv("Sensor size", format!("{:.1} x {:.1} mm", c.width_mm(), c.height_mm())),
             kv("Sensor diagonal", format!("{diag:.1} mm")),
@@ -117,7 +142,7 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
         let verdict = format!(
             "The vendor does not publish a corrected image circle. Ask whether a {diag:.0} mm diagonal is sharp to the corners."
         );
-        return CheckResult { number: 1, title: "Sensor fit", status: Status::Warn, details, verdict };
+        return CheckResult { number: 1, title: "Sensor fit", status: Status::Warn, details, equations, verdict };
     };
     let details = vec![
         kv("Sensor size", format!("{:.1} x {:.1} mm", c.width_mm(), c.height_mm())),
@@ -146,7 +171,18 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
             "A large part of the sensor is outside the corrected field. Use a smaller sensor or crop.".to_string(),
         )
     };
-    CheckResult { number: 1, title: "Sensor fit", status, details, verdict }
+    equations.push(eq("Image circle / diagonal", "IC / diagonal", format!("{} / {}", num(ic), num(diag)), num(ic / diag)));
+    equations.push(rule(
+        format!(
+            "PASS if IC >= diagonal ({} mm), WARN if IC >= {} x diagonal ({} mm), else FAIL",
+            num(diag),
+            limits::FIT_WARN_FRACTION,
+            num(limits::FIT_WARN_FRACTION * diag)
+        ),
+        format!("IC = {} mm", num(ic)),
+        status,
+    ));
+    CheckResult { number: 1, title: "Sensor fit", status, details, equations, verdict }
 }
 
 /// Check 2: is a star spread across the right number of pixels?
@@ -154,7 +190,7 @@ pub fn check_sensor_fit(t: &Telescope, c: &Camera) -> CheckResult {
 /// The star is the image the pixels sample (seeing, diffraction, optics and
 /// detector diffusion: see `psf.rs`) at the sensor centre.
 /// Returns the check plus (plate scale, pixels across, recommended bin).
-pub fn check_sampling(c: &Camera, site: &Site, psf: &PsfBudget) -> (CheckResult, f64, f64, u32) {
+pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site, psf: &PsfBudget) -> (CheckResult, f64, f64, u32) {
     let scale = psf.plate_scale;
     let star = psf.sampled_fwhm(FieldPoint::Center);
     let p = OpticsCalculator::pixels_across_star(star, scale);
@@ -195,6 +231,39 @@ pub fn check_sampling(c: &Camera, site: &Site, psf: &PsfBudget) -> (CheckResult,
         ));
     }
 
+    let optics = psf.optics_at(FieldPoint::Center);
+    let diffusion = psf.diffusion_arcsec.unwrap_or(0.0);
+    let mut equations = vec![
+        eq(
+            "Plate scale",
+            "206264.806 x (pixel (um) / 1000) / FL (mm)",
+            format!("{} x ({} / 1000) / {}", ARCSEC_PER_RADIAN, num(c.pixel_um), num(t.focal_length_mm)),
+            format!("{}\"/px", num(scale)),
+        ),
+        eq(
+            "Star FWHM (center)",
+            "sqrt(seeing^2 + diffraction^2 + optics^2 + diffusion^2)",
+            format!(
+                "sqrt({}^2 + {}^2 + {}^2 + {}^2)",
+                num(psf.seeing_arcsec),
+                num(psf.diffraction_arcsec),
+                num(optics),
+                num(diffusion)
+            ),
+            format!("{}\"", num(star)),
+        ),
+        eq("Pixels across a star p", "star FWHM / plate scale", format!("{} / {}", num(star), num(scale)), num(p)),
+        eq(
+            "Best bin",
+            &format!("b in 1..{} minimizing |p / b - {}|", limits::MAX_BIN, limits::SAMPLING_TARGET),
+            (1..=limits::MAX_BIN)
+                .map(|b| format!("b={b}: {}", num((p / b as f64 - limits::SAMPLING_TARGET).abs())))
+                .collect::<Vec<_>>()
+                .join(", "),
+            format!("{bin}x{bin}"),
+        ),
+        eq("Footprint", "p^2", format!("{}^2", num(p)), format!("{} px", num(footprint))),
+    ];
     let (status, verdict) = if p < limits::SAMPLING_UNDER_FAIL {
         (
             Status::Fail,
@@ -230,7 +299,24 @@ pub fn check_sampling(c: &Camera, site: &Site, psf: &PsfBudget) -> (CheckResult,
             ),
         )
     };
-    (CheckResult { number: 2, title: "Sampling (plate scale vs seeing)", status, details, verdict }, scale, p, bin)
+    equations.push(rule(
+        format!(
+            "FAIL < {} <= WARN < {} <= PASS <= {} (well sampled) < PASS <= {} (mildly oversampled) < WARN <= {} < FAIL",
+            limits::SAMPLING_UNDER_FAIL,
+            limits::SAMPLING_GOOD_MIN,
+            limits::SAMPLING_GOOD_MAX,
+            limits::SAMPLING_BIN2_MAX,
+            limits::SAMPLING_OVER_FAIL
+        ),
+        format!("p = {}", num(p)),
+        status,
+    ));
+    (
+        CheckResult { number: 2, title: "Sampling (plate scale vs seeing)", status, details, equations, verdict },
+        scale,
+        p,
+        bin,
+    )
 }
 
 /// Check 3: what pixel size does this telescope want, and does the camera provide it?
@@ -247,6 +333,36 @@ pub fn check_ideal_pixel(t: &Telescope, c: &Camera, psf: &PsfBudget) -> CheckRes
         kv("Closest binned match", format!("{b}x{b} -> {effective:.2} um  (ratio {m:.2})")),
     ];
 
+    let star = psf.sampled_fwhm(FieldPoint::Center);
+    let mut equations = vec![
+        eq(
+            "Ideal pixel",
+            &format!("(star FWHM / {}) / 206264.806 x FL (mm) x 1000", limits::SAMPLING_TARGET),
+            format!(
+                "({} / {}) / {} x {} x 1000",
+                num(star),
+                limits::SAMPLING_TARGET,
+                ARCSEC_PER_RADIAN,
+                num(t.focal_length_mm)
+            ),
+            format!("{} um", num(ideal)),
+        ),
+        eq(
+            "Closest bin",
+            &format!("b in 1..{} minimizing |ln(pixel x b / ideal)|", limits::MAX_BIN),
+            (1..=limits::MAX_BIN)
+                .map(|k| format!("b={k}: {}", num((c.pixel_um * k as f64 / ideal).ln().abs())))
+                .collect::<Vec<_>>()
+                .join(", "),
+            format!("{b}x{b}"),
+        ),
+        eq(
+            "Match ratio m",
+            "pixel x b / ideal",
+            format!("{} x {b} / {}", num(c.pixel_um), num(ideal)),
+            num(m),
+        ),
+    ];
     let (status, verdict) = if in_range && b == 1 {
         (Status::Pass, "Natural match: the camera samples this telescope correctly without binning.".to_string())
     } else if in_range && b == 2 {
@@ -269,7 +385,16 @@ pub fn check_ideal_pixel(t: &Telescope, c: &Camera, psf: &PsfBudget) -> CheckRes
             format!("Camera pixels are far smaller than this telescope wants, even at {b}x{b} binning. Look for pixels near {ideal:.0} um."),
         )
     };
-    CheckResult { number: 3, title: "Ideal pixel size (camera match)", status, details, verdict }
+    equations.push(rule(
+        format!(
+            "PASS if {} <= m <= {} at 1x1 or 2x2, WARN if in range only at a larger bin, WARN if out of range",
+            limits::PIXEL_MATCH_LOW,
+            limits::PIXEL_MATCH_HIGH
+        ),
+        format!("m = {} at {b}x{b}", num(m)),
+        status,
+    ));
+    CheckResult { number: 3, title: "Ideal pixel size (camera match)", status, details, equations, verdict }
 }
 
 fn optics_status(growth: f64) -> Status {
@@ -286,15 +411,23 @@ fn optics_status(growth: f64) -> Status {
 pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
     let seeing_um = OpticsCalculator::seeing_blur_um(site.seeing_arcsec, t.focal_length_mm);
     let mut details = vec![kv("Seeing blur at the focal plane", format!("{seeing_um:.1} um FWHM"))];
+    let mut equations = vec![eq(
+        "Seeing blur",
+        "seeing (\") / 206264.806 x FL (mm) x 1000",
+        format!("{} / {} x {} x 1000", num(site.seeing_arcsec), ARCSEC_PER_RADIAN, num(t.focal_length_mm)),
+        format!("{} um", num(seeing_um)),
+    )];
 
     let spot = match &t.spot {
         Some(s) if !s.points.is_empty() => s,
         _ => {
+            equations.push(rule("INFO when no spot sizes are entered".into(), "no spot data".into(), Status::Info));
             return CheckResult {
                 number: 4,
                 title: "Optical quality vs seeing",
                 status: Status::Info,
                 details,
+                equations,
                 verdict: "No spot-size data entered. Ask the vendor for the RMS spot size on-axis and at your sensor's corner, and whether it is a radius or a diameter.".to_string(),
             }
         }
@@ -329,6 +462,26 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
         };
         let (fc, gc) = growth(center_rms);
         let (fe, ge) = growth(corner_rms);
+        let factor = if is_radius {
+            format!("{FWHM_PER_RMS_RADIUS} x RMS radius")
+        } else {
+            format!("{FWHM_PER_RMS_RADIUS} x RMS diameter / 2")
+        };
+        let divide = if is_radius { "" } else { " / 2" };
+        for (point, rms, optics, g) in [("center", center_rms, fc, gc), ("corner", corner_rms, fe, ge)] {
+            equations.push(eq(
+                &format!("{name}, {point}: optics FWHM"),
+                &factor,
+                format!("{FWHM_PER_RMS_RADIUS} x {}{divide}", num(rms)),
+                format!("{} um", num(optics)),
+            ));
+            equations.push(eq(
+                &format!("{name}, {point}: star growth"),
+                "sqrt(seeing^2 + optics^2) / seeing - 1",
+                format!("sqrt({}^2 + {}^2) / {} - 1", num(seeing_um), num(optics), num(seeing_um)),
+                format!("{}%", num(g * 100.0)),
+            ));
+        }
         details.push(kv(
             name,
             format!(
@@ -364,7 +517,20 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
             ),
         }
     };
-    CheckResult { number: 4, title: "Optical quality vs seeing", status, details, verdict }
+    equations.push(rule(
+        format!(
+            "on the worst growth: PASS <= {}% < WARN <= {}% < FAIL; WARN if the radius and diameter readings disagree",
+            short(limits::OPTICS_PASS_GROWTH * 100.0),
+            short(limits::OPTICS_WARN_GROWTH * 100.0)
+        ),
+        format!(
+            "worst growth = {}%{}",
+            num(worst_growth * 100.0),
+            if consistent { "" } else { ", readings disagree" }
+        ),
+        status,
+    ));
+    CheckResult { number: 4, title: "Optical quality vs seeing", status, details, equations, verdict }
 }
 
 /// Check 5: effective collecting area and depth relative to the reference.
@@ -374,6 +540,22 @@ pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckR
     let area = OpticsCalculator::effective_area_m2(t.aperture_mm, blocked);
     let equivalent_d = OpticsCalculator::equivalent_aperture_mm(area);
 
+    let d_m = t.aperture_mm / 1000.0;
+    let mut equations = vec![
+        eq("Geometric area", "pi / 4 x D (m)^2", format!("pi / 4 x {}^2", num(d_m)), format!("{} m^2", num(geometric))),
+        eq(
+            "Effective area",
+            "geometric x (1 - obstructed area fraction)",
+            format!("{} x (1 - {})", num(geometric), num(blocked)),
+            format!("{} m^2", num(area)),
+        ),
+        eq(
+            "Equivalent aperture",
+            "2 x sqrt(area / pi) x 1000",
+            format!("2 x sqrt({} / pi) x 1000", num(area)),
+            format!("{} mm", num(equivalent_d)),
+        ),
+    ];
     let mut details = vec![
         kv("Geometric area (pi/4 x D^2)", format!("{geometric:.4} m^2")),
         kv("Central obstruction", t.obstruction.describe()),
@@ -387,6 +569,12 @@ pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckR
             details.push(kv("Reference configuration", r.label.clone()));
             details.push(kv("Light vs reference", format!("x{ratio:.2}")));
             details.push(kv("Depth vs reference", format!("{dm:+.2} mag")));
+            equations.push(eq(
+                "Depth vs reference",
+                "2.5 x log10(area / reference area)",
+                format!("2.5 x log10({} / {})", num(area), num(r.effective_area_m2)),
+                format!("{dm:+.4} mag"),
+            ));
             if dm >= 0.0 {
                 format!("Reaches about {dm:.2} mag fainter than the reference at equal exposure.")
             } else {
@@ -395,7 +583,11 @@ pub fn check_area_depth(t: &Telescope, reference: Option<&Reference>) -> (CheckR
         }
         None => "This configuration is the reference. Later configurations are compared against it.".to_string(),
     };
-    (CheckResult { number: 5, title: "Collecting area and depth", status: Status::Info, details, verdict }, area)
+    equations.push(rule("not graded (informational)".into(), "collecting area".into(), Status::Info));
+    (
+        CheckResult { number: 5, title: "Collecting area and depth", status: Status::Info, details, equations, verdict },
+        area,
+    )
 }
 
 /// Check 6: field of view and search speed (etendue).
@@ -406,14 +598,56 @@ pub fn check_field_and_search(
     area_m2: f64,
     reference: Option<&Reference>,
 ) -> (CheckResult, f64, f64, f64) {
-    let w = OpticsCalculator::fov_deg(c.width_mm(), t.focal_length_mm);
-    let h = OpticsCalculator::fov_deg(c.height_mm(), t.focal_length_mm);
+    let fl = t.focal_length_mm;
+    let (sw, sh) = (c.width_mm(), c.height_mm());
+    // Method 2, the small-angle approximation, is what the rest of the
+    // evaluation uses; method 1 is shown beside it so the error is visible.
+    let w = OpticsCalculator::fov_deg(sw, fl);
+    let h = OpticsCalculator::fov_deg(sh, fl);
+    let w_exact = OpticsCalculator::fov_exact_deg(sw, fl);
+    let h_exact = OpticsCalculator::fov_exact_deg(sh, fl);
     let fov_area = OpticsCalculator::field_area_deg2(w, h);
     let etendue = OpticsCalculator::etendue_m2_deg2(area_m2, fov_area);
+    let rel = |approx: f64, exact: f64| (approx - exact) / exact * 100.0;
+
+    let mut equations = Vec::new();
+    for (axis, s, exact, approx) in [("width", sw, w_exact, w), ("height", sh, h_exact, h)] {
+        equations.push(eq(
+            &format!("TFOV {axis}, method 1 (exact)"),
+            "2 x atan(s / (2 x FL)) x 180 / pi",
+            format!("2 x atan({} / (2 x {})) x {}", num(s), num(fl), deg_per_rad()),
+            format!("{} deg", num(exact)),
+        ));
+        equations.push(eq(
+            &format!("TFOV {axis}, method 2 (small-angle)"),
+            "s / FL x 180 / pi",
+            format!("{} / {} x {}", num(s), num(fl), deg_per_rad()),
+            format!("{} deg  ({:+.4}% vs exact)", num(approx), rel(approx, exact)),
+        ));
+    }
+    equations.push(eq("Field area", "TFOV width x TFOV height (method 2)", format!("{} x {}", num(w), num(h)), format!("{} deg^2", num(fov_area))));
+    equations.push(eq(
+        "Etendue",
+        "effective area x field area",
+        format!("{} x {}", num(area_m2), num(fov_area)),
+        format!("{} m^2 deg^2", num(etendue)),
+    ));
 
     let mut details = vec![
         kv(
-            "Field of view",
+            "TFOV, method 1: exact trigonometric",
+            format!("{w_exact:.4} x {h_exact:.4} deg  (2 atan(s / 2FL))"),
+        ),
+        kv(
+            "TFOV, method 2: small-angle approximation",
+            format!(
+                "{w:.4} x {h:.4} deg  (s / FL; {:+.4}% / {:+.4}% vs exact)",
+                rel(w, w_exact),
+                rel(h, h_exact)
+            ),
+        ),
+        kv(
+            "Field of view (method 2, used below)",
             format!("{w:.2} x {h:.2} deg  ({:.0}' x {:.0}')", w * ARCMIN_PER_DEGREE, h * ARCMIN_PER_DEGREE),
         ),
         kv("Field area", format!("{fov_area:.2} deg^2")),
@@ -424,6 +658,12 @@ pub fn check_field_and_search(
         Some(r) => {
             let ratio = etendue / r.etendue;
             details.push(kv("Search speed vs reference", format!("x{ratio:.2}")));
+            equations.push(eq(
+                "Search speed vs reference",
+                "etendue / reference etendue",
+                format!("{} / {}", num(etendue), num(r.etendue)),
+                format!("x{}", num(ratio)),
+            ));
             if ratio >= 1.0 {
                 format!("Surveys sky {ratio:.1}x faster than the reference (each at its own depth).")
             } else {
@@ -432,8 +672,16 @@ pub fn check_field_and_search(
         }
         None => "This configuration is the reference for search-speed comparisons.".to_string(),
     };
+    equations.push(rule("not graded (informational)".into(), "field of view".into(), Status::Info));
     (
-        CheckResult { number: 6, title: "Field of view and search speed", status: Status::Info, details, verdict },
+        CheckResult {
+            number: 6,
+            title: "Field of view and search speed",
+            status: Status::Info,
+            details,
+            equations,
+            verdict,
+        },
         w,
         h,
         etendue,
@@ -461,7 +709,25 @@ pub fn check_focus(t: &Telescope, site: &Site) -> (CheckResult, f64) {
             "Demanding. Requires a motorized focuser, temperature-compensated autofocus, and a sensor tilt adjuster.".to_string(),
         )
     };
-    (CheckResult { number: 7, title: "Focus tolerance", status, details, verdict }, cfz)
+    let equations = vec![
+        eq("Focal ratio N", "FL / D", format!("{} / {}", num(t.focal_length_mm), num(t.aperture_mm)), num(n)),
+        eq(
+            "Critical focus zone",
+            "+/- 2.44 x wavelength (um) x N^2",
+            format!("2.44 x {} x {}^2", num(site.wavelength_um), num(n)),
+            format!("+/-{} um", num(cfz)),
+        ),
+        rule(
+            format!(
+                "PASS (forgiving) if CFZ >= {} um, PASS (moderate) if >= {} um, else WARN",
+                limits::CFZ_FORGIVING_UM,
+                limits::CFZ_DEMANDING_UM
+            ),
+            format!("CFZ = {} um", num(cfz)),
+            status,
+        ),
+    ];
+    (CheckResult { number: 7, title: "Focus tolerance", status, details, equations, verdict }, cfz)
 }
 
 /// Check 8: payload against mount capacity, and back focus.
@@ -484,6 +750,13 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
         0.0
     });
     let total = PayloadCalculator::total_weight_lb(ota, cam, p.accessories_lb);
+    let mut equations = vec![eq(
+        "Payload",
+        "OTA + camera + accessories (unknown weights count as 0)",
+        format!("{} + {} + {}", num(ota), num(cam), num(p.accessories_lb)),
+        format!("{} lb", num(total)),
+    )];
+    let mut rules: Vec<String> = Vec::new();
     details.push(kv(
         "Payload (OTA + camera + accessories)",
         format!("{ota:.1} + {cam:.1} + {:.1} = {total:.1} lb ({:.1} kg)", p.accessories_lb, total * KG_PER_LB),
@@ -499,6 +772,13 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
             let name = p.mount.as_ref().map(|m| m.name.as_str()).unwrap_or("Mount");
             details.push(kv("Mount", name.to_string()));
             details.push(kv("Mount capacity", format!("{cap:.0} lb -> payload is {:.0}% of rating", f * 100.0)));
+            equations.push(eq("Capacity fraction", "payload / mount rating", format!("{} / {}", num(total), num(cap)), format!("{}%", num(f * 100.0))));
+            rules.push(format!(
+                "payload: PASS <= {}% < WARN <= {}% < FAIL (here {}%)",
+                short(limits::PAYLOAD_PASS_FRACTION * 100.0),
+                short(limits::PAYLOAD_WARN_FRACTION * 100.0),
+                num(f * 100.0)
+            ));
             if f <= limits::PAYLOAD_PASS_FRACTION {
                 statuses.push(Status::Pass);
                 notes.push("Payload is within the comfortable range of the mount.".to_string());
@@ -518,6 +798,8 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
         (Some(avail), Some(req)) => {
             let margin = PayloadCalculator::back_focus_margin_mm(avail, req);
             details.push(kv("Back focus available / required", format!("{avail:.1} / {req:.1} mm")));
+            equations.push(eq("Back focus margin", "available - required", format!("{} - {}", num(avail), num(req)), format!("{} mm", num(margin))));
+            rules.push(format!("back focus: PASS if margin >= 0, else FAIL (here {} mm)", num(margin)));
             if margin >= 0.0 {
                 statuses.push(Status::Pass);
                 notes.push(format!("Back focus has {margin:.1} mm to spare."));
@@ -531,8 +813,20 @@ pub fn check_practical_fit(cfg: &Config) -> (CheckResult, Option<f64>) {
     }
 
     let status = statuses.iter().copied().max().unwrap_or(Status::Info);
+    equations.push(if rules.is_empty() {
+        rule("INFO when neither payload margin nor back focus can be judged".into(), "nothing to judge".into(), status)
+    } else {
+        rule(format!("worst of [{}]", rules.join("; ")), "worst".into(), status)
+    });
     (
-        CheckResult { number: 8, title: "Practical fit (payload, back focus)", status, details, verdict: notes.join(" ") },
+        CheckResult {
+            number: 8,
+            title: "Practical fit (payload, back focus)",
+            status,
+            details,
+            equations,
+            verdict: notes.join(" "),
+        },
         fraction,
     )
 }
@@ -595,7 +889,7 @@ pub fn evaluate(cfg: &Config, site: &Site, reference: Option<&Reference>) -> Eva
     let c = &cfg.camera;
     let psf = PsfBudget::resolve(t, c, site);
     let fit = check_sensor_fit(t, c);
-    let (sampling, scale, px_across, bin) = check_sampling(c, site, &psf);
+    let (sampling, scale, px_across, bin) = check_sampling(t, c, site, &psf);
     let ideal = check_ideal_pixel(t, c, &psf);
     let optics = check_optics(t, c, site);
     let (area_check, area) = check_area_depth(t, reference);

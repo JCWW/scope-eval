@@ -5,12 +5,12 @@ use scope_eval::checks;
 use scope_eval::constants::{DEFAULT_MIN_ELEVATION_DEG, DEFAULT_SEEING_ARCSEC, DEFAULT_WAVELENGTH_UM, MAX_PASS_SEARCH_HOURS};
 use scope_eval::model::{Config, Site};
 use scope_eval::passes::build_propagator;
-use scope_eval::report::{ComparisonReport, EvaluationReport, PassTable, RegimeDetails, FORMULAS};
+use scope_eval::report::{ComparisonReport, EvaluationReport, PassTable, RegimeDetails, ReportStyle, FORMULAS};
 
 use super::input;
 use super::prompts;
 
-pub fn run_interactive() {
+pub fn run_interactive(mut style: ReportStyle) {
     println!("==========================================================================");
     println!(" scope-eval: telescope + camera evaluation calculator");
     println!("==========================================================================");
@@ -47,6 +47,14 @@ pub fn run_interactive() {
             ),
             "Predict passes for a satellite".to_string(),
             "Show formula summary".to_string(),
+            format!(
+                "Report style: {} (switch to {})",
+                style.describe(),
+                match style {
+                    ReportStyle::Standard => ReportStyle::WithEquations.describe(),
+                    ReportStyle::WithEquations => ReportStyle::Standard.describe(),
+                }
+            ),
             "Remove all configurations and start over".to_string(),
             "Quit".to_string(),
         ];
@@ -56,7 +64,7 @@ pub fn run_interactive() {
                 configs.push(cfg);
                 let evals = checks::evaluate_all(&configs, &site);
                 let last = configs.len() - 1;
-                print!("{}", EvaluationReport(&configs[last], &evals[last], &site));
+                print!("{}", EvaluationReport(&configs[last], &evals[last], &site, style));
             }
             1 => print!("{}", ComparisonReport(&checks::evaluate_all(&configs, &site))),
             2 => {
@@ -66,7 +74,7 @@ pub fn run_interactive() {
                     let labels: Vec<String> = configs.iter().map(|c| c.label.clone()).collect();
                     let k = input::ask_menu("Which configuration?", &labels);
                     let evals = checks::evaluate_all(&configs, &site);
-                    print!("{}", RegimeDetails(&evals[k]));
+                    print!("{}", RegimeDetails(&evals[k], style));
                 }
             }
             3 => {
@@ -86,6 +94,13 @@ pub fn run_interactive() {
             4 => run_pass_prediction(&mut site, &configs),
             5 => println!("{FORMULAS}"),
             6 => {
+                style = match style {
+                    ReportStyle::Standard => ReportStyle::WithEquations,
+                    ReportStyle::WithEquations => ReportStyle::Standard,
+                };
+                println!("Reports will now be printed {}.", style.describe());
+            }
+            7 => {
                 configs.clear();
                 println!("Cleared.");
             }
