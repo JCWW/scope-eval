@@ -69,10 +69,17 @@ pub struct Presets {
 
 /// Values the user enters on top of a mount preset. Each one, when present,
 /// replaces the preset's figure (or the assumed default).
+///
+/// Rate and acceleration apply to both axes; the `_by_axis` forms set one
+/// axis (azimuth then elevation, or hour angle then declination) and win
+/// over the both-axes figure for that axis.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MountOverrides {
     pub max_rate_deg_s: Option<f64>,
     pub max_accel_deg_s2: Option<f64>,
+    pub max_rate_deg_s_by_axis: [Option<f64>; 2],
+    pub max_accel_deg_s2_by_axis: [Option<f64>; 2],
     pub pointing_rms_arcsec: Option<f64>,
     pub jitter_rms_arcsec: Option<f64>,
 }
@@ -88,7 +95,16 @@ pub struct ConfigSpec {
     pub mount_overrides: MountOverrides,
 }
 
+/// scope-eval's `presets.yaml`, compiled in so every front end (the
+/// dashboard, the command-line runner, the tests) reads the same specs.
+pub const PRESETS_YAML: &str = include_str!("../../../presets.yaml");
+
 impl Presets {
+    /// The compiled-in presets, `PRESETS_YAML`.
+    pub fn builtin() -> Result<Presets, SimError> {
+        Presets::from_yaml(PRESETS_YAML)
+    }
+
     pub fn from_yaml(text: &str) -> Result<Presets, SimError> {
         let mut presets: Presets =
             serde_yaml::from_str(text).map_err(|e| SimError::new(format!("presets file: {e}")))?;
@@ -122,6 +138,14 @@ impl Presets {
         };
         let rate = positive("Maximum axis rate", o.max_rate_deg_s)?;
         let accel = positive("Maximum axis acceleration", o.max_accel_deg_s2)?;
+        let rate_by_axis = [
+            positive("Maximum axis 1 rate", o.max_rate_deg_s_by_axis[0])?,
+            positive("Maximum axis 2 rate", o.max_rate_deg_s_by_axis[1])?,
+        ];
+        let accel_by_axis = [
+            positive("Maximum axis 1 acceleration", o.max_accel_deg_s2_by_axis[0])?,
+            positive("Maximum axis 2 acceleration", o.max_accel_deg_s2_by_axis[1])?,
+        ];
         let pointing = non_negative("Pointing RMS", o.pointing_rms_arcsec)?;
         let jitter = non_negative("Tracking jitter RMS", o.jitter_rms_arcsec)?;
 
@@ -139,8 +163,10 @@ impl Presets {
             mount_model: MountModel {
                 kind,
                 kind_assumed,
-                max_rate_deg_s: Param::first_or(&[rate, m.max_slew_deg_s], DEFAULT_MAX_RATE_DEG_S),
-                max_accel_deg_s2: Param::first_or(&[accel, m.max_accel_deg_s2], DEFAULT_MAX_ACCEL_DEG_S2),
+                max_rate_deg_s: [0, 1]
+                    .map(|i| Param::first_or(&[rate_by_axis[i], rate, m.max_slew_deg_s], DEFAULT_MAX_RATE_DEG_S)),
+                max_accel_deg_s2: [0, 1]
+                    .map(|i| Param::first_or(&[accel_by_axis[i], accel, m.max_accel_deg_s2], DEFAULT_MAX_ACCEL_DEG_S2)),
                 pointing_rms_arcsec: Param::first_or(&[pointing, m.pointing_rms_arcsec], DEFAULT_POINTING_RMS_ARCSEC),
                 jitter_rms_arcsec: Param::first_or(&[jitter], DEFAULT_JITTER_RMS_ARCSEC),
                 servo_gain_per_s: SERVO_GAIN_PER_S,
@@ -160,7 +186,7 @@ fn find<'a, T>(items: &'a [T], name: impl Fn(&T) -> &String, wanted: &str, what:
 mod tests {
     use super::*;
 
-    const YAML: &str = include_str!("../../../presets.yaml");
+    const YAML: &str = PRESETS_YAML;
 
     fn spec(mount: &str, o: MountOverrides) -> ConfigSpec {
         ConfigSpec {
@@ -186,14 +212,39 @@ mod tests {
         let hw = p.resolve(&spec("PlaneWave L-350 (direct drive)", MountOverrides::default())).unwrap();
         let m = &hw.mount_model;
         assert_eq!(m.kind, MountKind::AltAz);
-        assert_eq!(m.max_rate_deg_s, Param::entered(50.0));
-        assert_eq!(m.max_accel_deg_s2, Param::assumed(DEFAULT_MAX_ACCEL_DEG_S2));
+        assert_eq!(m.max_rate_deg_s, [Param::entered(50.0); 2]);
+        assert_eq!(m.max_accel_deg_s2, [Param::assumed(DEFAULT_MAX_ACCEL_DEG_S2); 2]);
         assert_eq!(m.pointing_rms_arcsec, Param::assumed(DEFAULT_POINTING_RMS_ARCSEC));
 
         let o = MountOverrides { max_accel_deg_s2: Some(2.0), pointing_rms_arcsec: Some(30.0), ..Default::default() };
         let hw = p.resolve(&spec("PlaneWave L-350 (direct drive)", o)).unwrap();
-        assert_eq!(hw.mount_model.max_accel_deg_s2, Param::entered(2.0));
+        assert_eq!(hw.mount_model.max_accel_deg_s2, [Param::entered(2.0); 2]);
         assert_eq!(hw.mount_model.pointing_rms_arcsec, Param::entered(30.0));
+    }
+
+    #[test]
+    fn per_axis_overrides_win_for_their_axis() {
+        let p = Presets::from_yaml(YAML).unwrap();
+        let o = MountOverrides {
+            max_rate_deg_s: Some(10.0),
+            max_rate_deg_s_by_axis: [None, Some(4.0)],
+            max_accel_deg_s2_by_axis: [Some(3.0), None],
+            ..Default::default()
+        };
+        let m = p.resolve(&spec("PlaneWave L-350 (direct drive)", o)).unwrap().mount_model;
+        assert_eq!(m.max_rate_deg_s, [Param::entered(10.0), Param::entered(4.0)]);
+        assert_eq!(m.max_accel_deg_s2, [Param::entered(3.0), Param::assumed(DEFAULT_MAX_ACCEL_DEG_S2)]);
+
+        let bad = MountOverrides { max_rate_deg_s_by_axis: [Some(0.0), None], ..Default::default() };
+        assert!(p.resolve(&spec("PlaneWave L-350 (direct drive)", bad)).is_err());
+    }
+
+    #[test]
+    fn overrides_without_per_axis_fields_still_parse() {
+        // What the dashboard sent before per-axis limits existed.
+        let o: MountOverrides = serde_json::from_str(r#"{"max_rate_deg_s":2,"pointing_rms_arcsec":null}"#).unwrap();
+        assert_eq!(o.max_rate_deg_s, Some(2.0));
+        assert_eq!(o.max_rate_deg_s_by_axis, [None, None]);
     }
 
     #[test]

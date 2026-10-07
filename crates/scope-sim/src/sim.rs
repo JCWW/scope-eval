@@ -1,28 +1,39 @@
 //! The simulation loop.
 //!
-//! Every `STEP_S` the mount reads the *predicted* direction of the target
-//! (where the ephemeris says it is), converts it to axis angles, and each
-//! axis steps toward it within its limits (see `servo`). The *true* target
-//! runs `lead_s` ahead of the prediction, to model along-track ephemeris
-//! error. The boresight is wherever the axes point, displaced by a fixed
-//! pointing-model error drawn once per run and by short-term jitter. The
-//! pointing error is the true target's position in the camera frame.
+//! A run is assembled from four parts, each behind a trait so that any of
+//! them can be simulated or real:
+//!
+//! * a `Clock` (`clock.rs`) that says when each step arrives,
+//! * a `Tracker` (`tracker.rs`) that turns the prediction into axis commands,
+//! * a `MountDriver` (`mount.rs`) that follows them and reports its axes,
+//! * a `Sensor` (`sensor.rs`) that says where the target appears on the camera.
+//!
+//! Every `STEP_S` the tracker commands the mount, the clock waits for the
+//! step, the mount reports, the sensor measures and the `Evaluator`
+//! (`evaluator.rs`) accounts for it. `Simulation::new` assembles the fully
+//! simulated set; `Simulation::from_parts` takes any other.
 
-use serde::Serialize;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use orbit_prop::illumination::{lighting, Lighting};
 use orbit_prop::sun_moon::sun_position_km;
 use orbit_prop::{observe, Epoch, GroundSite, Observation, Propagator};
 
+use crate::clock::{Clock, SimClock, Tick};
 use crate::error::SimError;
-use crate::geometry::{
-    axes_from_enu, az_el_from_enu, camera_offset, enu_from_axes, enu_from_az_el, normalize, tangent_basis, wrap180,
-    MountKind, Vec3,
-};
+use crate::evaluator::{assumed_figures, Evaluator};
+use crate::geometry::{az_el_from_enu, enu_from_axes, MountKind, Vec3};
 use crate::hardware::Hardware;
-use crate::rng::Rng;
+use crate::mount::{MountCommand, MountDriver, MountState, SimMount};
 use crate::scenario::{passes_for, summarize, PassSummary, ScenarioSpec};
-use crate::servo::{Axis, AxisLimits, AxisStep, Wrap};
+use crate::sensor::{Measurement, Sensor, SyntheticSensor};
+use crate::telemetry::TelemetrySink;
+use crate::tracker::{OpenLoopTracker, Tracker};
+
+pub use crate::evaluator::{Summary, Verdict, FOV_PASS_FRACTION, FOV_WARN_FRACTION};
+pub use crate::sensor::JITTER_CORRELATION_S;
 
 /// Integration step, seconds. Short enough for a 4/s servo loop and for
 /// the azimuth swing of a near-zenith LEO pass.
@@ -32,15 +43,41 @@ pub const RECORD_INTERVAL_S: f64 = 0.5;
 /// Longest stretch of a pass that is simulated, seconds. Distant targets
 /// can stay up for a day; four hours shows everything a mount will do.
 pub const MAX_SIM_S: f64 = 4.0 * 3600.0;
-/// Correlation time of the tracking jitter, seconds.
-pub const JITTER_CORRELATION_S: f64 = 0.5;
-/// Fraction of the pass in the field needed for PASS and for WARN.
-pub const FOV_PASS_FRACTION: f64 = 0.99;
-pub const FOV_WARN_FRACTION: f64 = 0.90;
+
+/// Version of the telemetry this crate writes: `SimInfo`, `Sample`,
+/// `Summary` and the trace file built from them. Raise it whenever a field
+/// is renamed, removed or changes meaning; adding a field does not need it.
+pub const SCHEMA_VERSION: u32 = 1;
 
 const ARCSEC_PER_RAD: f64 = 206_264.806;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// Whether the target is in sunlight, as `orbit_prop` judges it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetLighting {
+    Sunlit,
+    Penumbra,
+    Umbra,
+}
+
+impl From<Lighting> for TargetLighting {
+    fn from(l: Lighting) -> TargetLighting {
+        match l {
+            Lighting::Sunlit => TargetLighting::Sunlit,
+            Lighting::Penumbra => TargetLighting::Penumbra,
+            Lighting::Umbra => TargetLighting::Umbra,
+        }
+    }
+}
+
+/// One recorded moment of a run.
+///
+/// Where each field comes from: `axis*` from the mount, `axis*_cmd_rate`
+/// from the tracker, `err_*` and `in_fov` from the sensor. `target_*` and
+/// `boresight_*` come from the sensor's simulated truth when it has one;
+/// otherwise the target is the prediction and the boresight is where the
+/// axes point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sample {
     /// Seconds since the start of the pass.
     pub t_s: f64,
@@ -66,19 +103,20 @@ pub struct Sample {
     pub axis2_accel_deg_s2: f64,
     pub rate_limited: bool,
     pub accel_limited: bool,
-    /// "sunlit", "penumbra" or "umbra".
-    pub lighting: &'static str,
+    pub lighting: TargetLighting,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TrackPoint {
     pub t_s: f64,
     pub az_deg: f64,
     pub el_deg: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SimInfo {
+    /// `SCHEMA_VERSION` of the crate that wrote this.
+    pub schema_version: u32,
     pub hardware: Hardware,
     pub target: String,
     pub pass: PassSummary,
@@ -87,41 +125,78 @@ pub struct SimInfo {
     pub truncated: bool,
     /// How far the true target runs ahead of the prediction, seconds.
     pub lead_s: f64,
-    pub axis_names: [&'static str; 2],
+    pub axis_names: [String; 2],
     pub step_s: f64,
     pub record_interval_s: f64,
-    /// The pointing-model error drawn for this run, camera x and y.
-    pub pointing_offset_arcsec: [f64; 2],
+    /// The pointing-model error drawn for this run, camera x and y. Only a
+    /// simulated sky knows it.
+    pub pointing_offset_arcsec: Option<[f64; 2]>,
     pub seed: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    Pass,
-    Warn,
-    Fail,
+/// Everything about a run that is the same whichever parts run it: the
+/// hardware description, the prediction, the site and the pass.
+pub struct RunSetup {
+    pub hw: Hardware,
+    /// The prediction the tracker follows.
+    pub prop: Arc<dyn Propagator>,
+    pub site: GroundSite,
+    pub target_label: String,
+    pub pass: PassSummary,
+    pub rise: Epoch,
+    pub duration_s: f64,
+    /// The pass is longer than `MAX_SIM_S` and only its start is run.
+    pub truncated: bool,
+    /// How far the true target runs ahead of the prediction, seconds:
+    /// the along-track ephemeris error over the orbital speed.
+    pub lead_s: f64,
+    pub seed: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Summary {
-    /// Seconds simulated so far.
-    pub t_s: f64,
-    pub complete: bool,
-    pub rms_err_arcsec: f64,
-    pub max_err_arcsec: f64,
-    pub max_err_at_s: f64,
-    pub in_fov_fraction: f64,
-    /// Times the target left the field.
-    pub fov_exits: u32,
-    pub rate_limited_s: f64,
-    pub accel_limited_s: f64,
-    /// Peak |rate| / maximum rate, per axis.
-    pub peak_rate_utilization: [f64; 2],
-    /// Peak |acceleration| / maximum acceleration, per axis.
-    pub peak_accel_utilization: [f64; 2],
-    pub verdict: Verdict,
-    pub verdict_reason: String,
+impl RunSetup {
+    pub fn prepare(hw: Hardware, scenario: &ScenarioSpec, pass_index: usize) -> Result<RunSetup, SimError> {
+        let crate::scenario::Prepared { prop, site, passes, .. } = passes_for(scenario)?;
+        let pass = passes
+            .get(pass_index)
+            .ok_or_else(|| SimError::new(format!("there is no pass {} in the search window", pass_index + 1)))?;
+        let speed = {
+            let v = prop.propagate(pass.culmination)?.v_km_s;
+            (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+        };
+        Ok(RunSetup {
+            target_label: prop.label().to_string(),
+            pass: summarize(pass_index, pass),
+            rise: pass.rise,
+            duration_s: pass.duration_s().min(MAX_SIM_S),
+            truncated: pass.duration_s() > MAX_SIM_S,
+            lead_s: scenario.ephemeris_error_km / speed,
+            seed: scenario.seed,
+            prop: Arc::from(prop),
+            site,
+            hw,
+        })
+    }
+}
+
+/// The four swappable parts of a run.
+pub struct Parts {
+    pub clock: Box<dyn Clock>,
+    pub tracker: Box<dyn Tracker>,
+    pub mount: Box<dyn MountDriver>,
+    pub sensor: Box<dyn Sensor>,
+}
+
+impl Parts {
+    /// Everything simulated: simulated time, the open-loop tracker, the
+    /// servo model of the mount and a synthetic sky.
+    pub fn simulated(setup: &RunSetup) -> Parts {
+        Parts {
+            clock: Box::new(SimClock),
+            tracker: Box::new(OpenLoopTracker::new(setup)),
+            mount: Box::new(SimMount::new(&setup.hw.mount_model)),
+            sensor: Box::new(SyntheticSensor::new(setup)),
+        }
+    }
 }
 
 /// State at the end of the latest step, enough to build a `Sample`.
@@ -131,129 +206,89 @@ struct Latest {
     target: Observation,
     target_r: Vec3,
     boresight: Vec3,
-    err: (f64, f64),
-    in_fov: bool,
-    cmd_vel: [f64; 2],
-    steps: [AxisStep; 2],
-}
-
-#[derive(Debug, Clone, Default)]
-struct Stats {
-    sum_sq: f64,
-    max: f64,
-    max_at: f64,
-    in_fov_s: f64,
-    exits: u32,
-    rate_limited_s: f64,
-    accel_limited_s: f64,
-    peak_rate: [f64; 2],
-    peak_accel: [f64; 2],
+    mount: MountState,
+    command: Option<MountCommand>,
+    /// The latest measurement, which may be from an earlier step.
+    measurement: Measurement,
 }
 
 pub struct Simulation {
-    hw: Hardware,
-    prop: Box<dyn Propagator>,
-    site: GroundSite,
-    target_label: String,
-    pass: PassSummary,
-    rise: Epoch,
-    duration_s: f64,
-    truncated: bool,
-    lead_s: f64,
-    seed: u64,
-    limits: [AxisLimits; 2],
-    axes: [Axis; 2],
-    cmd: (f64, f64),
-    offset: (f64, f64),
-    jitter: (f64, f64),
-    jitter_sigma: f64,
-    rng: Rng,
+    setup: RunSetup,
+    parts: Parts,
+    evaluator: Evaluator,
+    sinks: Vec<Box<dyn TelemetrySink>>,
     t: f64,
     next_record: f64,
     samples: Vec<Sample>,
-    /// Always `Some` once `new` returns.
-    latest: Option<Latest>,
-    stats: Stats,
+    latest: Latest,
 }
 
 impl Simulation {
+    /// A fully simulated run of one pass.
     pub fn new(hw: Hardware, scenario: &ScenarioSpec, pass_index: usize) -> Result<Simulation, SimError> {
-        let crate::scenario::Prepared { prop, site, passes, .. } = passes_for(scenario)?;
-        let pass = passes
-            .get(pass_index)
-            .ok_or_else(|| SimError::new(format!("there is no pass {} in the search window", pass_index + 1)))?;
-        let rise = pass.rise;
-        let duration_s = pass.duration_s().min(MAX_SIM_S);
-        let speed = {
-            let v = prop.propagate(pass.culmination)?.v_km_s;
-            (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-        };
-        let lead_s = scenario.ephemeris_error_km / speed;
+        let setup = RunSetup::prepare(hw, scenario, pass_index)?;
+        let parts = Parts::simulated(&setup);
+        Simulation::from_parts(setup, parts)
+    }
 
-        let m = &hw.mount_model;
-        let lim = AxisLimits { max_rate: m.max_rate_deg_s.value, max_accel: m.max_accel_deg_s2.value };
-        let wrap1 = match m.kind {
-            MountKind::AltAz => Wrap::Full,
-            MountKind::Equatorial => Wrap::Half,
-        };
-        let mut rng = Rng::new(scenario.seed);
-        let per_axis = |rms_arcsec: f64| rms_arcsec / ARCSEC_PER_RAD / std::f64::consts::SQRT_2;
-        let pointing_sigma = per_axis(m.pointing_rms_arcsec.value);
-        let jitter_sigma = per_axis(m.jitter_rms_arcsec.value);
-        let offset = (pointing_sigma * rng.gaussian(), pointing_sigma * rng.gaussian());
-        let jitter = (jitter_sigma * rng.gaussian(), jitter_sigma * rng.gaussian());
-
+    /// A run with the given parts. The tracker chooses where the run
+    /// starts, the mount is put there at rest, and the sensor takes the
+    /// first measurement.
+    pub fn from_parts(setup: RunSetup, mut parts: Parts) -> Result<Simulation, SimError> {
+        let start = parts.tracker.start()?;
+        let mount = parts.mount.prepare(start)?;
+        let measurement = parts
+            .sensor
+            .measure(Tick { t_s: 0.0, dt_s: 0.0 }, &mount)?
+            .ok_or_else(|| SimError::new("the sensor gave no first measurement"))?;
+        let evaluator = Evaluator::new(
+            parts.mount.capabilities().limits,
+            assumed_figures(&setup.hw.mount_model),
+            Some(&measurement),
+        );
+        let latest = latest(&setup, 0.0, mount, None, measurement)?;
         let mut sim = Simulation {
-            target_label: prop.label().to_string(),
-            pass: summarize(pass_index, pass),
-            hw,
-            prop,
-            site,
-            rise,
-            duration_s,
-            truncated: pass.duration_s() > MAX_SIM_S,
-            lead_s,
-            seed: scenario.seed,
-            limits: [lim, lim],
-            axes: [Axis::at_rest(0.0, wrap1), Axis::at_rest(0.0, Wrap::None)],
-            cmd: (0.0, 0.0),
-            offset,
-            jitter,
-            jitter_sigma,
-            rng,
+            setup,
+            parts,
+            evaluator,
+            sinks: Vec::new(),
             t: 0.0,
             next_record: 0.0,
             samples: Vec::new(),
-            latest: None,
-            stats: Stats::default(),
+            latest,
         };
-        // Start on target and at rest: the mount has slewed to the rise
-        // point and is waiting.
-        sim.cmd = sim.commanded_axes(0.0)?;
-        sim.axes[0].pos = sim.cmd.0;
-        sim.axes[1].pos = sim.cmd.1;
-        sim.measure([0.0; 2], [AxisStep::default(); 2])?;
-        sim.stats = Stats::default();
-        sim.record();
+        sim.record()?;
         Ok(sim)
     }
 
+    /// Send every sample, those recorded so far and each new one, to `sink`.
+    pub fn add_sink(&mut self, mut sink: Box<dyn TelemetrySink>) -> Result<(), SimError> {
+        for s in &self.samples {
+            sink.record(s)?;
+        }
+        self.sinks.push(sink);
+        Ok(())
+    }
+
     pub fn info(&self) -> SimInfo {
+        let s = &self.setup;
         SimInfo {
-            hardware: self.hw.clone(),
-            target: self.target_label.clone(),
-            pass: self.pass.clone(),
-            duration_s: self.duration_s,
-            truncated: self.truncated,
-            lead_s: self.lead_s,
-            axis_names: match self.hw.mount_model.kind {
+            schema_version: SCHEMA_VERSION,
+            hardware: s.hw.clone(),
+            target: s.target_label.clone(),
+            pass: s.pass.clone(),
+            duration_s: s.duration_s,
+            truncated: s.truncated,
+            lead_s: s.lead_s,
+            axis_names: match s.hw.mount_model.kind {
                 MountKind::AltAz => ["Azimuth", "Elevation"],
                 MountKind::Equatorial => ["Hour angle", "Declination"],
-            },
+            }
+            .map(String::from),
             step_s: STEP_S,
             record_interval_s: RECORD_INTERVAL_S,
-            pointing_offset_arcsec: [self.offset.0 * ARCSEC_PER_RAD, self.offset.1 * ARCSEC_PER_RAD],
-            seed: self.seed,
+            pointing_offset_arcsec: self.parts.sensor.pointing_offset_arcsec(),
+            seed: s.seed,
         }
     }
 
@@ -262,11 +297,11 @@ impl Simulation {
     }
 
     pub fn duration_s(&self) -> f64 {
-        self.duration_s
+        self.setup.duration_s
     }
 
     pub fn is_done(&self) -> bool {
-        self.t >= self.duration_s - 1e-9
+        self.t >= self.setup.duration_s - 1e-9
     }
 
     /// Every recorded sample so far.
@@ -281,11 +316,11 @@ impl Simulation {
 
     /// The predicted path across the sky, for drawing.
     pub fn track(&self, step_s: f64) -> Result<Vec<TrackPoint>, SimError> {
-        let n = (self.duration_s / step_s.max(0.1)).ceil() as usize;
+        let n = (self.setup.duration_s / step_s.max(0.1)).ceil() as usize;
         (0..=n)
             .map(|k| {
-                let t = (k as f64 * step_s).min(self.duration_s);
-                let o = self.look(t)?;
+                let t = (k as f64 * step_s).min(self.setup.duration_s);
+                let o = predicted(&self.setup, t)?;
                 Ok(TrackPoint { t_s: t, az_deg: o.az_deg, el_deg: o.el_deg })
             })
             .collect()
@@ -295,7 +330,7 @@ impl Simulation {
     /// samples recorded on the way.
     pub fn advance(&mut self, seconds: f64) -> Result<&[Sample], SimError> {
         let first_new = self.samples.len();
-        let until = (self.t + seconds.max(0.0)).min(self.duration_s);
+        let until = (self.t + seconds.max(0.0)).min(self.setup.duration_s);
         while self.t < until - 1e-9 {
             self.step((until - self.t).min(STEP_S))?;
         }
@@ -308,159 +343,48 @@ impl Simulation {
     }
 
     pub fn summary(&self) -> Summary {
-        let s = &self.stats;
-        let t = self.t.max(1e-9);
-        let in_fov_fraction = if self.t > 0.0 { (s.in_fov_s / t).min(1.0) } else { 1.0 };
-        let m = &self.hw.mount_model;
-        let mut assumed = Vec::new();
-        if m.max_rate_deg_s.assumed {
-            assumed.push("maximum axis rate");
-        }
-        if m.max_accel_deg_s2.assumed {
-            assumed.push("maximum axis acceleration");
-        }
-        if m.pointing_rms_arcsec.assumed {
-            assumed.push("pointing RMS");
-        }
-        let pct = in_fov_fraction * 100.0;
-        let (mut verdict, mut verdict_reason) = if in_fov_fraction >= FOV_PASS_FRACTION {
-            (Verdict::Pass, format!("The target stayed in the field for {pct:.1}% of the pass."))
-        } else if in_fov_fraction >= FOV_WARN_FRACTION {
-            (Verdict::Warn, format!("The target left the field {} time(s); in the field {pct:.1}% of the pass.", s.exits))
-        } else {
-            (Verdict::Fail, format!("The target was in the field for only {pct:.1}% of the pass."))
-        };
-        // As in scope-eval: never PASS on numbers nobody entered.
-        if verdict == Verdict::Pass && !assumed.is_empty() {
-            verdict = Verdict::Warn;
-            verdict_reason.push_str(&format!(" Not graded PASS because these were assumed: {}.", assumed.join(", ")));
-        }
-        Summary {
-            t_s: self.t,
-            complete: self.is_done(),
-            rms_err_arcsec: (s.sum_sq / t).sqrt() * ARCSEC_PER_RAD,
-            max_err_arcsec: s.max * ARCSEC_PER_RAD,
-            max_err_at_s: s.max_at,
-            in_fov_fraction,
-            fov_exits: s.exits,
-            rate_limited_s: s.rate_limited_s,
-            accel_limited_s: s.accel_limited_s,
-            peak_rate_utilization: [s.peak_rate[0] / self.limits[0].max_rate, s.peak_rate[1] / self.limits[1].max_rate],
-            peak_accel_utilization: [
-                s.peak_accel[0] / self.limits[0].max_accel,
-                s.peak_accel[1] / self.limits[1].max_accel,
-            ],
-            verdict,
-            verdict_reason,
-        }
-    }
-
-    fn look(&self, t_s: f64) -> Result<Observation, SimError> {
-        Ok(observe(&self.prop.propagate(self.rise.add_seconds(t_s))?, &self.site))
-    }
-
-    /// Axis angles that point at the predicted position at `t_s`.
-    fn commanded_axes(&self, t_s: f64) -> Result<(f64, f64), SimError> {
-        let o = self.look(t_s)?;
-        Ok(axes_from_enu(self.hw.mount_model.kind, enu_from_az_el(o.az_deg, o.el_deg), self.site.lat_deg))
+        self.evaluator.summary(self.t, self.is_done())
     }
 
     fn step(&mut self, dt: f64) -> Result<(), SimError> {
-        let gain = self.hw.mount_model.servo_gain_per_s;
-        let next = self.commanded_axes(self.t + dt)?;
-        let d1 = match self.axes[0].wrap {
-            Wrap::None => next.0 - self.cmd.0,
-            Wrap::Full | Wrap::Half => wrap180(next.0 - self.cmd.0),
-        };
-        let cmd_vel = [d1 / dt, (next.1 - self.cmd.1) / dt];
-        let steps = [
-            self.axes[0].step(self.cmd.0, cmd_vel[0], dt, self.limits[0], gain),
-            self.axes[1].step(self.cmd.1, cmd_vel[1], dt, self.limits[1], gain),
-        ];
-        self.cmd = next;
-        self.t += dt;
-
-        // First-order Gauss-Markov jitter with the requested RMS.
-        let phi = (-dt / JITTER_CORRELATION_S).exp();
-        let kick = self.jitter_sigma * (1.0 - phi * phi).sqrt();
-        self.jitter = (
-            self.jitter.0 * phi + kick * self.rng.gaussian(),
-            self.jitter.1 * phi + kick * self.rng.gaussian(),
-        );
-
-        let was_in = self.latest.map_or(true, |l| l.in_fov);
-        let l = self.measure(cmd_vel, steps)?;
-        let s = &mut self.stats;
-        let err = l.err.0.hypot(l.err.1);
-        s.sum_sq += err * err * dt;
-        if err > s.max {
-            s.max = err;
-            s.max_at = self.t;
-        }
-        if l.in_fov {
-            s.in_fov_s += dt;
-        } else if was_in {
-            s.exits += 1;
-        }
-        if steps.iter().any(|k| k.rate_limited) {
-            s.rate_limited_s += dt;
-        }
-        if steps.iter().any(|k| k.accel_limited) {
-            s.accel_limited_s += dt;
-        }
-        for (i, (axis, step)) in self.axes.iter().zip(steps).enumerate() {
-            s.peak_rate[i] = s.peak_rate[i].max(axis.vel.abs());
-            s.peak_accel[i] = s.peak_accel[i].max(step.accel.abs());
-        }
+        let p = &mut self.parts;
+        let command = p.tracker.command(self.t, dt, Some(&self.latest.measurement))?;
+        p.mount.command(&command)?;
+        let due = self.t + dt;
+        let reached = p.clock.wait_until(due)?;
+        // A simulated clock arrives exactly when due; keep the scheduled
+        // step then, so simulated runs are free of rounding from `due - t`.
+        let dt = if reached == due { dt } else { reached - self.t };
+        self.t = reached;
+        let tick = Tick { t_s: self.t, dt_s: dt };
+        let mount = p.mount.read(tick)?;
+        let measurement = p.sensor.measure(tick, &mount)?;
+        self.evaluator.add(tick, &mount, measurement.as_ref());
+        let measurement = measurement.unwrap_or(self.latest.measurement);
+        self.latest = latest(&self.setup, self.t, mount, Some(command), measurement)?;
 
         if self.t >= self.next_record - 1e-9 || self.is_done() {
-            self.record();
+            self.record()?;
         }
         Ok(())
     }
 
-    /// Where the true target appears relative to the boresight now.
-    fn measure(&mut self, cmd_vel: [f64; 2], steps: [AxisStep; 2]) -> Result<Latest, SimError> {
-        let kind = self.hw.mount_model.kind;
-        let lat = self.site.lat_deg;
-        let epoch = self.rise.add_seconds(self.t);
-        let state = self.prop.propagate(epoch.add_seconds(self.lead_s))?;
-        let target = observe(&state, &self.site);
-        let target_dir = enu_from_az_el(target.az_deg, target.el_deg);
-        let (a1, a2) = (self.axes[0].pos, self.axes[1].pos);
-        let axis_dir = enu_from_axes(kind, a1, a2, lat);
-        let (x, y) = tangent_basis(kind, a1, a2, lat);
-        let (ox, oy) = (self.offset.0 + self.jitter.0, self.offset.1 + self.jitter.1);
-        let (tx, ty) = camera_offset(axis_dir, x, y, target_dir);
-        let err = (tx - ox, ty - oy);
-        let boresight = normalize([
-            axis_dir[0] + ox * x[0] + oy * y[0],
-            axis_dir[1] + ox * x[1] + oy * y[1],
-            axis_dir[2] + ox * x[2] + oy * y[2],
-        ]);
-        let (half_w, half_h) = self.hw.optics.half_fov_rad();
-        // `camera_offset` puts a target behind the boresight near +/-180
-        // deg, so it can never pass this test.
-        let in_fov = err.0.abs() <= half_w && err.1.abs() <= half_h;
-        let latest = Latest { epoch, target, target_r: state.r_km, boresight, err, in_fov, cmd_vel, steps };
-        self.latest = Some(latest);
-        Ok(latest)
-    }
-
-    fn record(&mut self) {
+    fn record(&mut self) -> Result<(), SimError> {
         let s = self.sample();
+        for sink in &mut self.sinks {
+            sink.record(&s)?;
+        }
         self.samples.push(s);
         self.next_record += RECORD_INTERVAL_S;
+        Ok(())
     }
 
     fn sample(&self) -> Sample {
-        let l = self.latest.as_ref().expect("measured in new");
+        let l = &self.latest;
         let (bore_az, bore_el) = az_el_from_enu(l.boresight);
-        let lit = match lighting(l.target_r, sun_position_km(l.epoch)) {
-            Lighting::Sunlit => "sunlit",
-            Lighting::Penumbra => "penumbra",
-            Lighting::Umbra => "umbra",
-        };
+        let [a1, a2] = l.mount.axes;
+        let cmd_rate = |i: usize| l.command.map_or(0.0, |c| c.axes[i].rate_deg_s);
+        let err = l.measurement.err_rad;
         Sample {
             t_s: self.t,
             utc: l.epoch.to_string(),
@@ -468,29 +392,63 @@ impl Simulation {
             target_el_deg: l.target.el_deg,
             boresight_az_deg: bore_az,
             boresight_el_deg: bore_el,
-            err_x_arcsec: l.err.0 * ARCSEC_PER_RAD,
-            err_y_arcsec: l.err.1 * ARCSEC_PER_RAD,
-            err_arcsec: l.err.0.hypot(l.err.1) * ARCSEC_PER_RAD,
-            in_fov: l.in_fov,
-            axis1_deg: self.axes[0].pos,
-            axis2_deg: self.axes[1].pos,
-            axis1_rate_deg_s: self.axes[0].vel,
-            axis2_rate_deg_s: self.axes[1].vel,
-            axis1_cmd_rate_deg_s: l.cmd_vel[0],
-            axis2_cmd_rate_deg_s: l.cmd_vel[1],
-            axis1_accel_deg_s2: l.steps[0].accel,
-            axis2_accel_deg_s2: l.steps[1].accel,
-            rate_limited: l.steps.iter().any(|k| k.rate_limited),
-            accel_limited: l.steps.iter().any(|k| k.accel_limited),
-            lighting: lit,
+            err_x_arcsec: err.0 * ARCSEC_PER_RAD,
+            err_y_arcsec: err.1 * ARCSEC_PER_RAD,
+            err_arcsec: err.0.hypot(err.1) * ARCSEC_PER_RAD,
+            in_fov: l.measurement.in_fov,
+            axis1_deg: a1.pos_deg,
+            axis2_deg: a2.pos_deg,
+            axis1_rate_deg_s: a1.rate_deg_s,
+            axis2_rate_deg_s: a2.rate_deg_s,
+            axis1_cmd_rate_deg_s: cmd_rate(0),
+            axis2_cmd_rate_deg_s: cmd_rate(1),
+            axis1_accel_deg_s2: a1.accel_deg_s2,
+            axis2_accel_deg_s2: a2.accel_deg_s2,
+            rate_limited: l.mount.rate_limited(),
+            accel_limited: l.mount.accel_limited(),
+            lighting: lighting(l.target_r, sun_position_km(l.epoch)).into(),
         }
     }
+}
+
+/// Where the prediction puts the target at `t_s`, and its TEME position.
+fn predicted_state(setup: &RunSetup, t_s: f64) -> Result<(Observation, Vec3), SimError> {
+    let state = setup.prop.propagate(setup.rise.add_seconds(t_s))?;
+    Ok((observe(&state, &setup.site), state.r_km))
+}
+
+fn predicted(setup: &RunSetup, t_s: f64) -> Result<Observation, SimError> {
+    Ok(predicted_state(setup, t_s)?.0)
+}
+
+/// The state at `t_s` for sampling. Without a simulated truth the target is
+/// taken to be where it was predicted, and the boresight where the axes point.
+fn latest(
+    setup: &RunSetup,
+    t_s: f64,
+    mount: MountState,
+    command: Option<MountCommand>,
+    measurement: Measurement,
+) -> Result<Latest, SimError> {
+    let (target, target_r, boresight) = match measurement.truth {
+        Some(truth) => (truth.target, truth.target_r_km, truth.boresight_enu),
+        None => {
+            let (target, r) = predicted_state(setup, t_s)?;
+            let kind = setup.hw.mount_model.kind;
+            let axes = enu_from_axes(kind, mount.axes[0].pos_deg, mount.axes[1].pos_deg, setup.site.lat_deg);
+            (target, r, axes)
+        }
+    };
+    Ok(Latest { epoch: setup.rise.add_seconds(t_s), target, target_r, boresight, mount, command, measurement })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::hardware::{MountModel, Optics, Param};
+    use crate::telemetry::JsonLinesSink;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use crate::scenario::tests::iss_scenario;
     use crate::scenario::find_passes;
 
@@ -504,8 +462,8 @@ mod tests {
             mount_model: MountModel {
                 kind,
                 kind_assumed: false,
-                max_rate_deg_s: Param::entered(rate),
-                max_accel_deg_s2: Param::entered(accel),
+                max_rate_deg_s: [Param::entered(rate); 2],
+                max_accel_deg_s2: [Param::entered(accel); 2],
                 pointing_rms_arcsec: Param::entered(pointing),
                 jitter_rms_arcsec: Param::entered(jitter),
                 servo_gain_per_s: crate::hardware::SERVO_GAIN_PER_S,
@@ -539,7 +497,7 @@ mod tests {
     #[test]
     fn pointing_error_is_a_constant_offset() {
         let mut sim = Simulation::new(hardware(MountKind::AltAz, 1000.0, 1000.0, 60.0, 0.0), &iss_scenario(), lowest_pass()).unwrap();
-        let [ox, oy] = sim.info().pointing_offset_arcsec;
+        let [ox, oy] = sim.info().pointing_offset_arcsec.unwrap();
         let s = sim.run_to_end().unwrap();
         let expected = ox.hypot(oy);
         assert!(expected > 1.0, "drew a tiny offset: {expected}");
@@ -612,7 +570,7 @@ mod tests {
     #[test]
     fn assumed_figures_cap_the_verdict_at_warn() {
         let mut hw = hardware(MountKind::AltAz, 1000.0, 1000.0, 0.0, 0.0);
-        hw.mount_model.max_accel_deg_s2 = Param::assumed(1000.0);
+        hw.mount_model.max_accel_deg_s2[1] = Param::assumed(1000.0);
         let mut sim = Simulation::new(hw, &iss_scenario(), lowest_pass()).unwrap();
         let s = sim.run_to_end().unwrap();
         assert_eq!(s.verdict, Verdict::Warn);
@@ -622,5 +580,134 @@ mod tests {
     #[test]
     fn a_missing_pass_is_an_error() {
         assert!(Simulation::new(hardware(MountKind::AltAz, 50.0, 5.0, 0.0, 0.0), &iss_scenario(), 99).is_err());
+    }
+
+    /// The synthetic sensor with its truth withheld, as a camera would be.
+    struct NoTruth(SyntheticSensor);
+
+    impl Sensor for NoTruth {
+        fn measure(&mut self, tick: Tick, mount: &MountState) -> Result<Option<Measurement>, SimError> {
+            Ok(self.0.measure(tick, mount)?.map(|m| Measurement { truth: None, ..m }))
+        }
+    }
+
+    /// Measures only every `every`th tick after the first.
+    struct Sometimes {
+        inner: SyntheticSensor,
+        every: u32,
+        ticks: u32,
+    }
+
+    impl Sensor for Sometimes {
+        fn measure(&mut self, tick: Tick, mount: &MountState) -> Result<Option<Measurement>, SimError> {
+            let m = self.inner.measure(tick, mount)?;
+            self.ticks += 1;
+            Ok(if self.ticks == 1 || self.ticks % self.every == 0 { m } else { None })
+        }
+    }
+
+    /// Wakes a millisecond late every step, as a real-time clock might.
+    struct LateClock;
+
+    impl Clock for LateClock {
+        fn wait_until(&mut self, t_s: f64) -> Result<f64, SimError> {
+            Ok(t_s + 0.001)
+        }
+    }
+
+    /// Hands every recorded sample to a shared list.
+    struct Shared(Rc<RefCell<Vec<f64>>>);
+
+    impl TelemetrySink for Shared {
+        fn record(&mut self, sample: &Sample) -> Result<(), SimError> {
+            self.0.borrow_mut().push(sample.t_s);
+            Ok(())
+        }
+    }
+
+    fn with_parts(hw: Hardware, change: impl FnOnce(&RunSetup, &mut Parts)) -> Simulation {
+        let setup = RunSetup::prepare(hw, &iss_scenario(), lowest_pass()).unwrap();
+        let mut parts = Parts::simulated(&setup);
+        change(&setup, &mut parts);
+        Simulation::from_parts(setup, parts).unwrap()
+    }
+
+    #[test]
+    fn new_is_from_parts_with_the_simulated_parts() {
+        let hw = hardware(MountKind::Equatorial, 3.0, 2.0, 30.0, 2.0);
+        let mut a = Simulation::new(hw.clone(), &iss_scenario(), lowest_pass()).unwrap();
+        let mut b = with_parts(hw, |_, _| {});
+        assert_eq!(a.run_to_end().unwrap(), b.run_to_end().unwrap());
+        assert_eq!(a.samples(), b.samples());
+    }
+
+    #[test]
+    fn without_truth_the_grade_is_the_same_and_the_target_is_the_prediction() {
+        // No pointing error, jitter or ephemeris error: the prediction is
+        // the truth and the axes point where the boresight does.
+        let hw = hardware(MountKind::AltAz, 50.0, 10.0, 0.0, 0.0);
+        let mut truth = Simulation::new(hw.clone(), &iss_scenario(), lowest_pass()).unwrap();
+        let mut blind = with_parts(hw, |setup, parts| parts.sensor = Box::new(NoTruth(SyntheticSensor::new(setup))));
+        assert_eq!(truth.run_to_end().unwrap(), blind.run_to_end().unwrap());
+        assert_eq!(blind.info().pointing_offset_arcsec, None);
+        for (a, b) in truth.samples().iter().zip(blind.samples()) {
+            assert!((a.target_az_deg - b.target_az_deg).abs() < 1e-9 && (a.target_el_deg - b.target_el_deg).abs() < 1e-9);
+            assert!((a.boresight_el_deg - b.boresight_el_deg).abs() < 1e-6, "{} vs {}", a.boresight_el_deg, b.boresight_el_deg);
+            assert_eq!(a.err_arcsec, b.err_arcsec);
+        }
+    }
+
+    #[test]
+    fn missing_measurements_count_only_the_time_measured() {
+        let hw = hardware(MountKind::AltAz, 50.0, 10.0, 30.0, 1.0);
+        let mut sim = with_parts(hw, |setup, parts| {
+            parts.sensor = Box::new(Sometimes { inner: SyntheticSensor::new(setup), every: 7, ticks: 0 })
+        });
+        // Between measurements the state repeats the latest one: of 14
+        // steps, two bring a new measurement.
+        let errs: Vec<f64> = (0..14).map(|_| {
+            sim.advance(STEP_S).unwrap();
+            sim.current().err_arcsec
+        }).collect();
+        let changes = errs.windows(2).filter(|w| w[0] != w[1]).count();
+        assert_eq!(changes, 2, "{errs:?}");
+        let s = sim.run_to_end().unwrap();
+        assert!(s.complete);
+        assert_eq!(s.in_fov_fraction, 1.0);
+        assert!(s.rms_err_arcsec > 1.0);
+    }
+
+    #[test]
+    fn a_late_clock_steps_by_the_time_that_really_passed() {
+        let hw = hardware(MountKind::AltAz, 50.0, 10.0, 0.0, 0.0);
+        let mut sim = with_parts(hw, |_, parts| parts.clock = Box::new(LateClock));
+        sim.advance(1.0).unwrap();
+        // Each 0.02 s step lands 1 ms late, so a second takes 20 steps, not 50.
+        assert!(sim.t_s() >= 1.0 && sim.t_s() < 1.03, "{}", sim.t_s());
+        let s = sim.run_to_end().unwrap();
+        assert!(s.complete && s.max_err_arcsec < 1.0, "{s:?}");
+    }
+
+    #[test]
+    fn a_sink_gets_every_sample_including_those_before_it_was_added() {
+        let hw = hardware(MountKind::AltAz, 50.0, 10.0, 0.0, 0.0);
+        let mut sim = Simulation::new(hw, &iss_scenario(), lowest_pass()).unwrap();
+        sim.advance(3.0).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        sim.add_sink(Box::new(Shared(Rc::clone(&seen)))).unwrap();
+        sim.run_to_end().unwrap();
+        let times: Vec<f64> = sim.samples().iter().map(|s| s.t_s).collect();
+        assert_eq!(*seen.borrow(), times);
+    }
+
+    #[test]
+    fn json_lines_sink_writes_one_sample_per_line() {
+        let hw = hardware(MountKind::AltAz, 50.0, 10.0, 0.0, 0.0);
+        let sim = Simulation::new(hw, &iss_scenario(), lowest_pass()).unwrap();
+        let mut sink = JsonLinesSink::new(Vec::new());
+        sink.record(&sim.current()).unwrap();
+        let text = String::from_utf8(sink.into_inner()).unwrap();
+        let back: Sample = serde_json::from_str(text.trim_end()).unwrap();
+        assert_eq!(back, sim.current());
     }
 }

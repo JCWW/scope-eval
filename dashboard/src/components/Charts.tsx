@@ -85,13 +85,25 @@ export function ErrorChart({ info, samples }: { info: SimInfo; samples: Sample[]
 export function RateChart({ info, samples }: { info: SimInfo; samples: Sample[] }) {
   const c = useVizColors();
   const points = decimate(samples, MAX_POINTS, (s) => Math.max(Math.abs(s.axis1_rate_deg_s), Math.abs(s.axis2_rate_deg_s)));
-  const limit = info.hardware.mount_model.max_rate_deg_s;
+  const limits = info.hardware.mount_model.max_rate_deg_s;
+  const [a1, a2] = info.axis_names;
+  const sameLimit = limits[0].value === limits[1].value;
+  const top = Math.max(limits[0].value, limits[1].value);
   const peak = points.reduce((m, s) => Math.max(m, Math.abs(s.axis1_rate_deg_s), Math.abs(s.axis2_rate_deg_s)), 0);
   // Show the limit when it is within reach of the data; a 50 deg/s limit
   // over a 1 deg/s pass would flatten the lines into the axis.
-  const showLimit = limit.value <= Math.max(peak, 0.05) * 4;
-  const max = showLimit ? limit.value * 1.08 : Math.max(peak * 1.15, 0.05);
-  const [a1, a2] = info.axis_names;
+  const showLimit = Math.min(limits[0].value, limits[1].value) <= Math.max(peak, 0.05) * 4;
+  const max = showLimit ? top * 1.08 : Math.max(peak * 1.15, 0.05);
+  const assumed = limits.some((p) => p.assumed) ? ' (assumed)' : '';
+  const limitText = sameLimit
+    ? `${limits[0].value} deg/s limit${assumed}`
+    : `${limits[0].value} / ${limits[1].value} deg/s limits${assumed}`;
+  const lines = sameLimit
+    ? [{ y: limits[0].value, label: 'Axis rate limit' }]
+    : [
+        { y: limits[0].value, label: `${a1} limit` },
+        { y: limits[1].value, label: `${a2} limit` },
+      ];
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -100,8 +112,8 @@ export function RateChart({ info, samples }: { info: SimInfo; samples: Sample[] 
       </Typography>
       <Typography variant="body2" color="text.secondary">
         {showLimit
-          ? `How fast each axis turns, against the mount's ${limit.value} deg/s limit${limit.assumed ? ' (assumed)' : ''}.`
-          : `How fast each axis turns. The ${limit.value} deg/s limit${limit.assumed ? ' (assumed)' : ''} is far above this pass's needs.`}
+          ? `How fast each axis turns, against the mount's ${limitText}.`
+          : `How fast each axis turns. The ${limitText} ${sameLimit ? 'is' : 'are'} far above this pass's needs.`}
       </Typography>
       <LineChart
         height={HEIGHT}
@@ -129,15 +141,17 @@ export function RateChart({ info, samples }: { info: SimInfo; samples: Sample[] 
         grid={{ horizontal: true }}
         margin={{ left: 8, right: 16 }}
       >
-        {showLimit && (
-          <ChartsReferenceLine
-            y={limit.value}
-            label="Axis rate limit"
-            labelAlign="start"
-            lineStyle={{ stroke: c.muted, strokeDasharray: '6 4', strokeWidth: 1.5 }}
-            labelStyle={{ fill: c.inkSecondary, fontSize: 12 }}
-          />
-        )}
+        {showLimit &&
+          lines.map((l) => (
+            <ChartsReferenceLine
+              key={l.label}
+              y={l.y}
+              label={l.label}
+              labelAlign="start"
+              lineStyle={{ stroke: c.muted, strokeDasharray: '6 4', strokeWidth: 1.5 }}
+              labelStyle={{ fill: c.inkSecondary, fontSize: 12 }}
+            />
+          ))}
       </LineChart>
     </Paper>
   );

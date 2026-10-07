@@ -124,7 +124,7 @@ pub fn star_image(
     let recorded_fwhm = both(&|at| b.recorded_fwhm(at));
 
     let mut assumed: Vec<String> = b.assumed.iter().map(|s| s.to_string()).collect();
-    if jitter.assumed {
+    if jitter.is_assumed() {
         assumed.push("tracking jitter".to_string());
     }
 
@@ -137,7 +137,7 @@ pub fn star_image(
         diffusion_arcsec: b.diffusion_arcsec,
         pixel_arcsec: b.pixel_arcsec,
         jitter_arcsec,
-        jitter_assumed: jitter.assumed,
+        jitter_assumed: jitter.is_assumed(),
         sampled_fwhm: both(&|at| b.sampled_fwhm(at)),
         sampled_fwhm_if_diameter: b
             .sampled_fwhm_if_diameter(FieldPoint::Center)

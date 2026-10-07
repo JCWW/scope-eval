@@ -10,12 +10,10 @@ use wasm_bindgen::prelude::*;
 
 use scope_sim::{Conditions, ConfigSpec, Presets, ScenarioSpec, SimError, Simulation};
 
-/// scope-eval's hardware presets, compiled in so the dashboard and the
-/// command-line tool can never disagree about a spec.
-const PRESETS_YAML: &str = include_str!("../../../presets.yaml");
-
+/// scope-eval's hardware presets, compiled into scope-sim so the dashboard
+/// and the command-line tools can never disagree about a spec.
 fn presets_parsed() -> Result<Presets, SimError> {
-    Presets::from_yaml(PRESETS_YAML)
+    Presets::builtin()
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(text: &str, what: &str) -> Result<T, SimError> {

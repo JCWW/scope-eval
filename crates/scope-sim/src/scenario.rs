@@ -57,8 +57,26 @@ pub struct ScenarioSpec {
     pub seed: u64,
 }
 
+/// How much of a pass the satellite spends in sunlight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PassLightingLabel {
+    Sunlit,
+    Partial,
+    Eclipsed,
+}
+
+/// How dark the site is during a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteDarkLabel {
+    Dark,
+    Twilight,
+    Daylight,
+}
+
 /// One pass, as the dashboard lists it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PassSummary {
     pub index: usize,
     pub rise: String,
@@ -70,13 +88,13 @@ pub struct PassSummary {
     pub peak_el_rate_deg_s: f64,
     pub peak_ha_rate_deg_s: f64,
     pub peak_dec_rate_deg_s: f64,
-    pub lighting: &'static str,
-    pub site_dark: &'static str,
+    pub lighting: PassLightingLabel,
+    pub site_dark: SiteDarkLabel,
     pub clipped_start: bool,
     pub clipped_end: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PassList {
     pub target: String,
     pub passes: Vec<PassSummary>,
@@ -189,14 +207,14 @@ pub(crate) fn summarize(index: usize, p: &Pass) -> PassSummary {
         peak_ha_rate_deg_s: p.peak_ha_rate_deg_s,
         peak_dec_rate_deg_s: p.peak_dec_rate_deg_s,
         lighting: match p.lighting {
-            PassLighting::Sunlit => "sunlit",
-            PassLighting::Partial => "partial",
-            PassLighting::Eclipsed => "eclipsed",
+            PassLighting::Sunlit => PassLightingLabel::Sunlit,
+            PassLighting::Partial => PassLightingLabel::Partial,
+            PassLighting::Eclipsed => PassLightingLabel::Eclipsed,
         },
         site_dark: match p.site_dark {
-            PassDarkness::Dark => "dark",
-            PassDarkness::Partial => "twilight",
-            PassDarkness::Daylight => "daylight",
+            PassDarkness::Dark => SiteDarkLabel::Dark,
+            PassDarkness::Partial => SiteDarkLabel::Twilight,
+            PassDarkness::Daylight => SiteDarkLabel::Daylight,
         },
         clipped_start: p.clipped_start,
         clipped_end: p.clipped_end,
