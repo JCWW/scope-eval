@@ -37,6 +37,11 @@ No preset carries a quantum efficiency, read-noise or full-well figure. All thre
 | Preset | Pixel (um) | Pixels | Shutter | Notes |
 |---|---|---|---|---|
 | Sony IMX455 full frame (Moravian C3-61000 PRO, QHY600 PRO) | 3.76 | 9576 x 6388 | Rolling, 39.028 us/line | Line time from the Moravian C3 manual. 2.0 lb (QHY600 PRO). |
+| ZWO ASI6200MM Pro / MC Pro | 3.76 | 9576 x 6388 | Rolling, line time unknown | 1.54 lb (0.7 kg). |
+| QHYCCD QHY600M / QHY600C PH | 3.76 | 9576 x 6388 | Rolling, line time unknown | Weight not published for the PH. |
+| Atik Apx60 | 3.76 | 9576 x 6380 | Rolling, line time unknown | Atik's pages disagree on 6380 vs 6388 rows. About 2.2 lb (1 kg). |
+| Moravian Instruments C3-61000 PRO | 3.76 | 9576 x 6388 | Rolling, 39.028 us/line | From the Moravian C3 manual. 3.5 lb (1.6 kg) with standard cooling. |
+| FLI Aurora AR455 | 3.76 | 9568 x 6380 | Rolling, line time unknown | Preliminary spec sheet. About 2 lb (0.9 kg). |
 | Sony IMX571 APS-C (Moravian C3-26000 PRO) | 3.76 | 6252 x 4176 | Rolling, 34.667 us/line | Line time from the Moravian C3 manual. |
 | Sony IMX461 medium format | 3.76 | 11664 x 8750 | Rolling, line time unknown | Exact pixel count varies by vendor. |
 | Sony IMX174 global shutter (e.g. QHY174M-GPS) | 5.86 | 1936 x 1216 | Global | Small sensor often used for low-orbit timing work. |
