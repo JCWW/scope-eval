@@ -7,10 +7,10 @@ use crate::calculations::camera::CameraTimingCalculator;
 use crate::calculations::mount::PayloadCalculator;
 use crate::calculations::optics::OpticsCalculator;
 use crate::constants::{
-    checks_limits as limits, ARCMIN_PER_DEGREE, ARCSEC_PER_RADIAN, DEG_PER_RADIAN, FWHM_PER_RMS_RADIUS,
+    checks_limits as limits, ARCMIN_PER_DEGREE, ARCSEC_PER_RADIAN, FWHM_PER_RMS_RADIUS,
     KG_PER_LB, SIDEREAL_RATE_ARCSEC_PER_S, TIMING_ERROR_EXAMPLE_S,
 };
-use crate::equations::{eq, num, rule, short};
+use crate::equations::{deg_per_rad, eq, num, rule, short};
 use crate::model::{Camera, Config, Shutter, Site, SpotConvention, Telescope};
 use crate::psf::{FieldPoint, PsfBudget};
 use crate::regimes::{evaluate_regimes, RegimeEvaluation};
@@ -237,7 +237,7 @@ pub fn check_sampling(t: &Telescope, c: &Camera, site: &Site, psf: &PsfBudget) -
         eq(
             "Plate scale",
             "206264.806 x (pixel (um) / 1000) / FL (mm)",
-            format!("{} x ({} / 1000) / {}", ARCSEC_PER_RADIAN.to_string(), num(c.pixel_um), num(t.focal_length_mm)),
+            format!("{} x ({} / 1000) / {}", ARCSEC_PER_RADIAN, num(c.pixel_um), num(t.focal_length_mm)),
             format!("{}\"/px", num(scale)),
         ),
         eq(
@@ -342,7 +342,7 @@ pub fn check_ideal_pixel(t: &Telescope, c: &Camera, psf: &PsfBudget) -> CheckRes
                 "({} / {}) / {} x {} x 1000",
                 num(star),
                 limits::SAMPLING_TARGET,
-                ARCSEC_PER_RADIAN.to_string(),
+                ARCSEC_PER_RADIAN,
                 num(t.focal_length_mm)
             ),
             format!("{} um", num(ideal)),
@@ -414,7 +414,7 @@ pub fn check_optics(t: &Telescope, c: &Camera, site: &Site) -> CheckResult {
     let mut equations = vec![eq(
         "Seeing blur",
         "seeing (\") / 206264.806 x FL (mm) x 1000",
-        format!("{} / {} x {} x 1000", num(site.seeing_arcsec), ARCSEC_PER_RADIAN.to_string(), num(t.focal_length_mm)),
+        format!("{} / {} x {} x 1000", num(site.seeing_arcsec), ARCSEC_PER_RADIAN, num(t.focal_length_mm)),
         format!("{} um", num(seeing_um)),
     )];
 
@@ -615,13 +615,13 @@ pub fn check_field_and_search(
         equations.push(eq(
             &format!("TFOV {axis}, method 1 (exact)"),
             "2 x atan(s / (2 x FL)) x 180 / pi",
-            format!("2 x atan({} / (2 x {})) x {}", num(s), num(fl), format!("{DEG_PER_RADIAN:.6}")),
+            format!("2 x atan({} / (2 x {})) x {}", num(s), num(fl), deg_per_rad()),
             format!("{} deg", num(exact)),
         ));
         equations.push(eq(
             &format!("TFOV {axis}, method 2 (small-angle)"),
             "s / FL x 180 / pi",
-            format!("{} / {} x {}", num(s), num(fl), format!("{DEG_PER_RADIAN:.6}")),
+            format!("{} / {} x {}", num(s), num(fl), deg_per_rad()),
             format!("{} deg  ({:+.4}% vs exact)", num(approx), rel(approx, exact)),
         ));
     }

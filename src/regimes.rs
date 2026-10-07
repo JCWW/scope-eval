@@ -10,7 +10,7 @@
 //! in docs/08-orbital-regimes.md. Change them in `regimes()` to match your own catalog.
 
 use crate::checks::{kv, Evaluation, Status};
-use crate::equations::{eq, num, rule, short};
+use crate::equations::{deg_per_rad, eq, num, peak_accel_coeff, photons_mag0, rule, short};
 use crate::calculations::camera::CameraTimingCalculator;
 use crate::calculations::detection::DetectionCalculator;
 use crate::calculations::mount::MountDynamicsCalculator;
@@ -21,7 +21,7 @@ use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_FULL_WELL_E,
     DEFAULT_POINTING_RMS_ARCSEC, DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S,
     DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MAS_PER_ARCSEC, MAX_EXPOSURE_S,
-    PEAK_ACCEL_COEFF, PHOTONS_M2_S_MAG0, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
+    PHOTONS_M2_S_MAG0, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
     SIDEREAL_RATE_ARCSEC_PER_S, SUN_APPARENT_MAG,
 };
 use crate::constants::plausible_ranges as ranges;
@@ -286,7 +286,7 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
         eq(
             "Prediction error",
             "ephemeris error (km) / range (km) x 206264.806",
-            format!("{} / {} x {}", num(r.ephemeris_uncertainty_km), num(r.range_km), ARCSEC_PER_RADIAN.to_string()),
+            format!("{} / {} x {}", num(r.ephemeris_uncertainty_km), num(r.range_km), ARCSEC_PER_RADIAN),
             format!("{}\"", num(ephem_arcsec)),
         ),
         eq(
@@ -719,8 +719,8 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
                 let z_accel = MountDynamicsCalculator::accel_limited_keyhole_rad(omega_rad, a);
                 equations.push(eq(
                     "Acceleration keyhole",
-                    &format!("z = omega x sqrt({} / max accel (rad/s^2))", format!("{PEAK_ACCEL_COEFF:.6}")),
-                    format!("{} x sqrt({} / {})", num(omega_rad), format!("{PEAK_ACCEL_COEFF:.6}"), num(a)),
+                    &format!("z = omega x sqrt({} / max accel (rad/s^2))", peak_accel_coeff()),
+                    format!("{} x sqrt({} / {})", num(omega_rad), peak_accel_coeff(), num(a)),
                     format!("{} rad = {} deg", num(z_accel), num(z_accel.to_degrees())),
                 ));
             }
@@ -772,13 +772,13 @@ fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
         eq(
             "omega",
             "rate vs ground (\"/s) / 206264.806",
-            format!("{} / {}", num(r.rate_vs_ground), ARCSEC_PER_RADIAN.to_string()),
+            format!("{} / {}", num(r.rate_vs_ground), ARCSEC_PER_RADIAN),
             format!("{} rad/s", num(omega_rad_s)),
         ),
         eq(
             "Required peak acceleration",
-            &format!("{} x omega^2 x 180 / pi", format!("{PEAK_ACCEL_COEFF:.6}")),
-            format!("{} x {}^2 x {}", format!("{PEAK_ACCEL_COEFF:.6}"), num(omega_rad_s), format!("{DEG_PER_RADIAN:.6}")),
+            &format!("{} x omega^2 x 180 / pi", peak_accel_coeff()),
+            format!("{} x {}^2 x {}", peak_accel_coeff(), num(omega_rad_s), deg_per_rad()),
             format!("{} deg/s^2", num(required)),
         ),
     ];
@@ -1142,10 +1142,10 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         ),
         eq(
             "Signal S",
-            &format!("{} x 10^(-0.4 m) x area x QE x throughput x t", format!("{PHOTONS_M2_S_MAG0:e}")),
+            &format!("{} x 10^(-0.4 m) x area x QE x throughput x t", photons_mag0()),
             format!(
                 "{} x 10^(-0.4 x {}) x {} x {} x {} x {}",
-                format!("{PHOTONS_M2_S_MAG0:e}"),
+                photons_mag0(),
                 num(target_mag),
                 num(area),
                 num(p.qe),
@@ -1156,10 +1156,10 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         ),
         eq(
             "Sky B",
-            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2 x t x n", format!("{PHOTONS_M2_S_MAG0:e}")),
+            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2 x t x n", photons_mag0()),
             format!(
                 "{} x 10^(-0.4 x {}) x {} x {} x {} x {}^2 x {} x {}",
-                format!("{PHOTONS_M2_S_MAG0:e}"),
+                photons_mag0(),
                 num(p.sky_mag_arcsec2),
                 num(area),
                 num(p.qe),
@@ -1190,10 +1190,10 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         ),
         eq(
             "Signal coefficient C",
-            &format!("{} x area x QE x throughput x t", format!("{PHOTONS_M2_S_MAG0:e}")),
+            &format!("{} x area x QE x throughput x t", photons_mag0()),
             format!(
                 "{} x {} x {} x {} x {}",
-                format!("{PHOTONS_M2_S_MAG0:e}"),
+                photons_mag0(),
                 num(area),
                 num(p.qe),
                 num(p.throughput),
@@ -1343,10 +1343,10 @@ fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> 
     equations.extend([
         eq(
             "Target rate A",
-            &format!("{} x 10^(-0.4 m) x area x QE x throughput", format!("{PHOTONS_M2_S_MAG0:e}")),
+            &format!("{} x 10^(-0.4 m) x area x QE x throughput", photons_mag0()),
             format!(
                 "{} x 10^(-0.4 x {}) x {} x {} x {}",
-                format!("{PHOTONS_M2_S_MAG0:e}"),
+                photons_mag0(),
                 num(target_mag),
                 num(area),
                 num(p.qe),
@@ -1356,10 +1356,10 @@ fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> 
         ),
         eq(
             "Sky per pixel B",
-            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2", format!("{PHOTONS_M2_S_MAG0:e}")),
+            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2", photons_mag0()),
             format!(
                 "{} x 10^(-0.4 x {}) x {} x {} x {} x {}^2",
-                format!("{PHOTONS_M2_S_MAG0:e}"),
+                photons_mag0(),
                 num(p.sky_mag_arcsec2),
                 num(area),
                 num(p.qe),

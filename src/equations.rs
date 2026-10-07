@@ -10,6 +10,22 @@
 //! recomputed separately, so they cannot drift from what was judged.
 
 use crate::checks::Status;
+use crate::constants::{DEG_PER_RADIAN, PEAK_ACCEL_COEFF, PHOTONS_M2_S_MAG0};
+
+/// 180 / pi as the equations print it.
+pub fn deg_per_rad() -> String {
+    format!("{DEG_PER_RADIAN:.6}")
+}
+
+/// The peak tracking-acceleration coefficient, 3 sqrt(3) / 8.
+pub fn peak_accel_coeff() -> String {
+    format!("{PEAK_ACCEL_COEFF:.6}")
+}
+
+/// Photons per m^2 per second from a magnitude-zero source.
+pub fn photons_mag0() -> String {
+    format!("{PHOTONS_M2_S_MAG0:e}")
+}
 
 /// A number to about five significant figures, enough to recompute the
 /// next step by hand. Very large or small values use scientific notation.
