@@ -17,13 +17,14 @@ use crate::calculations::optics::OpticsCalculator;
 use crate::calculations::orbit::OrbitCalculator;
 use crate::calculations::psf::PsfCalculator;
 use crate::constants::{
-    regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_POINTING_RMS_ARCSEC,
-    DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S, DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN,
-    EARTH_RADIUS_KM, MAS_PER_ARCSEC, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
-    SIDEREAL_RATE_ARCSEC_PER_S,
+    regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_FULL_WELL_E,
+    DEFAULT_POINTING_RMS_ARCSEC, DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S,
+    DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MAS_PER_ARCSEC, MAX_EXPOSURE_S,
+    REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2, SIDEREAL_RATE_ARCSEC_PER_S,
 };
 use crate::constants::plausible_ranges as ranges;
 use crate::photometry::Photometry;
+use crate::psf::FieldPoint;
 use crate::model::{plausible, Capability, Config, MountType, Shutter, Site};
 
 /// How a regime's targets are usually observed.
@@ -762,10 +763,16 @@ fn residual_rate_arcsec_s(r: &Regime) -> f64 {
     }
 }
 
-/// Is the target bright enough for this configuration to detect?
-fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
-    let title = "Detection";
-    let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
+/// The target magnitude and exposure the detection and saturation checks
+/// share, each with where it came from ("entered" or "derived").
+struct Observation {
+    target_mag: f64,
+    mag_from: &'static str,
+    exposure_s: f64,
+    exp_from: &'static str,
+}
+
+fn observation(cfg: &Config, ev: &Evaluation, r: &Regime) -> Observation {
     let (target_mag, mag_from) = match cfg.target_mag_override {
         Some(m) => (m, "entered"),
         None => (
@@ -778,13 +785,22 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
             "derived",
         ),
     };
-    let residual = residual_rate_arcsec_s(r);
     // The recorded star (system PSF at the sensor centre), not the seeing alone.
     let star = ev.metrics.star_fwhm_arcsec;
-    let (exposure, exp_from) = match cfg.exposure_override_s {
+    let (exposure_s, exp_from) = match cfg.exposure_override_s {
         Some(t) => (t, "entered"),
-        None => (DetectionCalculator::trail_limited_exposure_s(star, residual), "derived"),
+        None => (DetectionCalculator::trail_limited_exposure_s(star, residual_rate_arcsec_s(r)), "derived"),
     };
+    Observation { target_mag, mag_from, exposure_s, exp_from }
+}
+
+/// Is the target bright enough for this configuration to detect?
+fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
+    let title = "Detection";
+    let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
+    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = observation(cfg, ev, r);
+    let residual = residual_rate_arcsec_s(r);
+    let star = ev.metrics.star_fwhm_arcsec;
 
     let scale = ev.metrics.plate_scale;
     let area = ev.metrics.effective_area_m2;
@@ -832,7 +848,7 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
     };
     let mut verdict = if trivial {
         format!(
-            "Detection is not the limiting factor here, so choose exposure for saturation and timing instead. What limits this regime is {}.",
+            "Detection is not the limiting factor here, so choose exposure for saturation (see the saturation check) and timing instead. What limits this regime is {}.",
             r.limiting_factor
         )
     } else if status == Status::Pass {
@@ -870,6 +886,113 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
     RegimeCheck { component: Component::System, title, status, details, verdict }
 }
 
+/// Does the target's brightest pixel stay inside the detector's linear range?
+///
+/// The peak pixel holds the target's light that lands in it (star centred on
+/// a pixel, the brightest case, and spread along any trail) plus the sky.
+/// Saturating at the derived exposure is a WARN, because the exposure is a
+/// choice: the check reports the longest one that stays linear. It is a FAIL
+/// when an entered exposure saturates, or when even a millisecond does.
+fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
+    let title = "Saturation";
+    let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
+    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = observation(cfg, ev, r);
+    let residual = residual_rate_arcsec_s(r);
+    let (well, well_from) =
+        match plausible(cfg.camera.full_well_e, ranges::FULL_WELL_MIN, ranges::FULL_WELL_MAX) {
+            Some(w) => (w, "entered"),
+            None => (DEFAULT_FULL_WELL_E, "assumed"),
+        };
+    // Read noise plays no part in saturation, so it is not named here.
+    let mut assumed: Vec<&'static str> = p.assumed.iter().copied().filter(|a| *a != "read noise").collect();
+    if well_from == "assumed" {
+        assumed.push("full well");
+    }
+
+    let area = ev.metrics.effective_area_m2;
+    let target_rate = DetectionCalculator::signal_e_per_s(target_mag, area, p.qe, p.throughput);
+    let sky_px_rate =
+        DetectionCalculator::sky_e_per_px_s(p.sky_mag_arcsec2, ev.metrics.plate_scale, area, p.qe, p.throughput);
+    let fraction_at = |t: f64| {
+        ev.psf.trailed_peak_pixel_fraction(FieldPoint::Center, DetectionCalculator::trail_arcsec(residual, t))
+    };
+    let peak_at = |t: f64| (target_rate * fraction_at(t) + sky_px_rate) * t;
+
+    let peak = peak_at(exposure);
+    let fill = peak / well;
+    let linear_level = limits::SATURATION_WARN_FRACTION * well;
+    let t_max = exposure.max(MAX_EXPOSURE_S);
+    let t_linear = DetectionCalculator::exposure_to_reach_s(linear_level, peak_at, t_max);
+    let t_full = DetectionCalculator::exposure_to_reach_s(well, peak_at, t_max);
+    let bright_limit = DetectionCalculator::brightest_unsaturated_mag(
+        linear_level,
+        sky_px_rate * exposure,
+        DetectionCalculator::signal_coefficient(area, p.qe, p.throughput, exposure),
+        fraction_at(exposure),
+    );
+    let pct = limits::SATURATION_WARN_FRACTION * 100.0;
+    let fill_text = if fill < 0.01 {
+        "under 1% of full well".to_string()
+    } else if fill < 10.0 {
+        format!("{:.0}% of full well", fill * 100.0)
+    } else {
+        format!("{fill:.0} times full well")
+    };
+
+    let mut details = vec![
+        kv("Target magnitude", format!("{target_mag:.2} ({mag_from})")),
+        kv("Exposure", format!("{exposure:.3} s ({exp_from})")),
+        kv("Full well", format!("{well:.0} e- ({well_from})")),
+        kv("Light in the brightest pixel", format!("{:.2}%", fraction_at(exposure) * 100.0)),
+        kv("Peak pixel", format!("{peak:.0} e- ({fill_text})")),
+        kv("Linear limit", format!("{linear_level:.0} e- ({pct:.0}% of full well)")),
+        kv(
+            "Longest linear exposure",
+            t_linear.map_or_else(|| format!("over {}", fmt_duration(t_max)), fmt_duration),
+        ),
+        kv(
+            "Brightest linear magnitude",
+            bright_limit.map_or_else(|| "none: the sky alone passes the limit".to_string(), |m| format!("{m:.2}")),
+        ),
+    ];
+    if let Some(t) = t_full {
+        details.push(kv("Saturates at", fmt_duration(t)));
+    }
+
+    let too_bright_to_fix = t_full.is_some_and(|t| t < limits::MIN_PRACTICAL_EXPOSURE_S);
+    let mut status;
+    let mut verdict;
+    if fill < limits::SATURATION_WARN_FRACTION {
+        status = Status::Pass;
+        verdict = format!("The peak pixel stays at {fill_text}, inside the linear range.");
+    } else if too_bright_to_fix {
+        status = Status::Fail;
+        verdict = format!(
+            "Saturates even in a {} exposure, so shortening the exposure cannot fix it. It needs a neutral density filter, a smaller aperture or a deeper well.",
+            fmt_duration(limits::MIN_PRACTICAL_EXPOSURE_S)
+        );
+    } else {
+        let limit = t_linear.map_or_else(|| "a shorter one".to_string(), fmt_duration);
+        let state = if fill >= 1.0 { "Saturated" } else { "Close to saturation" };
+        status = if exp_from == "entered" && fill >= 1.0 { Status::Fail } else { Status::Warn };
+        verdict = format!(
+            "{state} at the {exp_from} {} exposure (peak pixel {fill_text}). Keep exposures under {limit} to stay below {pct:.0}%.",
+            fmt_duration(exposure)
+        );
+    }
+
+    // As with detection, never claim a PASS on numbers the user did not supply.
+    if !assumed.is_empty() {
+        details.push(kv("Assumed inputs", assumed.join(", ")));
+        if status == Status::Pass {
+            status = Status::Warn;
+            verdict.push_str(&format!(" Not graded PASS because these were assumed rather than entered: {}.", assumed.join(", ")));
+        }
+    }
+
+    RegimeCheck { component: Component::System, title, status, details, verdict }
+}
+
 /// Evaluate one configuration against every regime.
 pub fn evaluate_regimes(
     cfg: &Config,
@@ -892,6 +1015,7 @@ pub fn evaluate_regimes(
                 mount_slew_settle(cfg, &r),
                 mount_non_sidereal(cfg, &r),
                 system_detection(cfg, ev, &r, site),
+                system_saturation(cfg, ev, &r, site),
             ];
             RegimeEvaluation { regime: r, checks }
         })
@@ -1288,6 +1412,109 @@ mod tests {
         cfg.target_mag_override = Some(14.0);
         let c = detection("GEO", &cfg, &site);
         assert!(c.details.iter().any(|d| d.contains("14.00") && d.contains("entered")));
+    }
+
+    fn saturation(key: &str, cfg: &Config, site: &Site) -> RegimeCheck {
+        check_for(key, "Saturation", cfg, site)
+    }
+
+    /// Every input entered, including a 50,000 e- full well.
+    fn fully_specified_with_well() -> (Config, Site) {
+        let (mut cfg, site) = fully_specified();
+        cfg.camera.full_well_e = Some(50_000.0);
+        (cfg, site)
+    }
+
+    #[test]
+    fn saturation_peak_pixel_matches_a_hand_calculation() {
+        // GEO, 30 s, held still: 9222 e-/s from the target, 5.24% of it in
+        // the centred brightest pixel, plus 0.867 e-/s of sky.
+        let (cfg, site) = fully_specified_with_well();
+        let ev = crate::checks::evaluate(&cfg, &site, None);
+        let fraction = ev.psf.peak_pixel_fraction(FieldPoint::Center, true);
+        assert!(close(fraction, 0.0524, 0.0005));
+        let rate = DetectionCalculator::signal_e_per_s(11.5914, ev.metrics.effective_area_m2, 0.80, 0.85);
+        let sky = DetectionCalculator::sky_e_per_px_s(21.0, ev.metrics.plate_scale, ev.metrics.effective_area_m2, 0.80, 0.85);
+        let expected = (rate * fraction + sky) * 30.0;
+        let c = saturation("GEO", &cfg, &site);
+        assert!(close(detail_number(&c, "Peak pixel"), expected, 2.0), "peak vs {expected}");
+    }
+
+    #[test]
+    fn saturation_passes_a_faint_target_with_everything_entered() {
+        let (cfg, site) = fully_specified_with_well();
+        let c = saturation("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Pass);
+        assert!(c.verdict.contains("inside the linear range"));
+        assert!(!c.details.iter().any(|d| d.contains("Assumed inputs")));
+    }
+
+    #[test]
+    fn saturation_warns_at_a_derived_exposure_and_gives_the_fix() {
+        // A 2.25-mag LEO target in the derived 30 s floods the pixel. The
+        // exposure was the tool's choice, so this is a WARN with the longest
+        // exposure that stays under 80% of the well.
+        let (cfg, site) = fully_specified_with_well();
+        let c = saturation("LEO", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.verdict.starts_with("Saturated at the derived"));
+        assert!(c.verdict.contains("Keep exposures under"));
+
+        let ev = crate::checks::evaluate(&cfg, &site, None);
+        let area = ev.metrics.effective_area_m2;
+        let per_s = DetectionCalculator::signal_e_per_s(2.2522, area, 0.80, 0.85)
+            * ev.psf.peak_pixel_fraction(FieldPoint::Center, true)
+            + DetectionCalculator::sky_e_per_px_s(21.0, ev.metrics.plate_scale, area, 0.80, 0.85);
+        let expected_ms = 0.8 * 50_000.0 / per_s * 1e3;
+        let reported_ms = detail_number(&c, "Longest linear exposure");
+        assert!(close(reported_ms, expected_ms, 0.1), "{reported_ms} ms vs {expected_ms} ms");
+    }
+
+    #[test]
+    fn saturation_fails_an_entered_exposure_that_saturates() {
+        let (mut cfg, site) = fully_specified_with_well();
+        cfg.exposure_override_s = Some(1.0);
+        let c = saturation("LEO", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.verdict.starts_with("Saturated at the entered"));
+    }
+
+    #[test]
+    fn saturation_fails_when_even_a_millisecond_saturates() {
+        let (mut cfg, site) = fully_specified_with_well();
+        cfg.target_mag_override = Some(-6.0);
+        let c = saturation("LEO", &cfg, &site);
+        assert_eq!(c.status, Status::Fail);
+        assert!(c.verdict.contains("neutral density"));
+    }
+
+    #[test]
+    fn saturation_caps_at_warn_and_names_an_assumed_full_well() {
+        // Read noise does not enter saturation, so it is not named; the full
+        // well is.
+        let (cfg, site) = fully_specified();
+        let c = saturation("GEO", &cfg, &site);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.details.iter().any(|d| d.contains("Assumed inputs") && d.contains("full well")));
+        assert!(!c.details.iter().any(|d| d.contains("read noise")));
+        assert!(c.verdict.contains("assumed"));
+    }
+
+    #[test]
+    fn saturation_treats_a_nonsense_full_well_as_not_entered() {
+        let (mut cfg, site) = fully_specified();
+        cfg.camera.full_well_e = Some(f64::NAN);
+        let c = saturation("GEO", &cfg, &site);
+        assert!(c.details.iter().any(|d| d.contains("20000 e- (assumed)")));
+    }
+
+    #[test]
+    fn a_deeper_well_takes_longer_to_saturate() {
+        let (mut cfg, site) = fully_specified_with_well();
+        let shallow = detail_number(&saturation("LEO", &cfg, &site), "Longest linear exposure");
+        cfg.camera.full_well_e = Some(100_000.0);
+        let deep = detail_number(&saturation("LEO", &cfg, &site), "Longest linear exposure");
+        assert!(close(deep / shallow, 2.0, 0.01), "{deep} vs {shallow}");
     }
 
     #[test]

@@ -312,6 +312,11 @@ fn custom_camera() -> Camera {
     let height_px = input::ask_count("Sensor height, pixels");
     let read_noise_e = input::ask_optional("Read noise, e- RMS", false);
     let qe = input::ask_optional_hint("Peak quantum efficiency (fraction, e.g. 0.80)", "blank to assume 0.80", false);
+    let full_well_e = input::ask_optional_hint(
+        "Full-well capacity, e- (at the gain you will use)",
+        "blank to assume 20000",
+        false,
+    );
     let mtf_nyquist = input::ask_optional_hint(
         "Detector MTF at Nyquist (fraction, e.g. 0.55)",
         "blank to count the pixel aperture only",
@@ -332,6 +337,7 @@ fn custom_camera() -> Camera {
         height_px,
         read_noise_e,
         qe,
+        full_well_e,
         mtf_nyquist,
         shutter,
         weight_lb,

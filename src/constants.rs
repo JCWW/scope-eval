@@ -113,6 +113,10 @@ pub const DEFAULT_THROUGHPUT: f64 = 0.85;
 pub const DEFAULT_SKY_MAG_ARCSEC2: f64 = 21.0;
 /// Read noise assumed when not entered, electrons RMS: generic CMOS.
 pub const DEFAULT_READ_NOISE_E: f64 = 3.0;
+/// Full-well capacity assumed when not entered, electrons. Deliberately at the
+/// low end of modern CMOS (about 15k to 100k e- depending on gain mode), so an
+/// unknown well flags saturation early rather than late.
+pub const DEFAULT_FULL_WELL_E: f64 = 20_000.0;
 /// Longest exposure the tool will derive, seconds. Caps the stationary-target case.
 pub const MAX_EXPOSURE_S: f64 = 30.0;
 /// Acquisition slew distance assumed by the slew-and-settle check, degrees.
@@ -181,6 +185,12 @@ pub mod regimes_limits {
     pub const SNR_PASS: f64 = 10.0;
     /// System: above this SNR, detection is simply not what limits the regime.
     pub const SNR_TRIVIAL: f64 = 100.0;
+    /// System: a peak pixel above this fraction of full well is in the
+    /// nonlinear range near saturation, so centroids and photometry degrade.
+    pub const SATURATION_WARN_FRACTION: f64 = 0.8;
+    /// System: if even an exposure this short saturates (seconds), shortening
+    /// the exposure is no longer a practical fix.
+    pub const MIN_PRACTICAL_EXPOSURE_S: f64 = 0.001;
     /// Mount: required accelerations above this (deg/s^2) need a known rating to judge.
     ///
     /// Set between LEO (0.008627 deg/s^2) and MEO (1.37e-6 deg/s^2) so that LEO
@@ -213,6 +223,9 @@ pub mod plausible_ranges {
     /// Read noise, electrons RMS.
     pub const READ_NOISE_MIN: f64 = 0.1;
     pub const READ_NOISE_MAX: f64 = 100.0;
+    /// Full-well capacity, electrons.
+    pub const FULL_WELL_MIN: f64 = 1_000.0;
+    pub const FULL_WELL_MAX: f64 = 2_000_000.0;
     /// Detector MTF at Nyquist, a fraction of 1.
     pub const MTF_NYQUIST_MIN: f64 = 0.01;
     pub const MTF_NYQUIST_MAX: f64 = 1.0;

@@ -33,7 +33,7 @@
 * **One representative target.** Derived magnitudes assume a 10 m^2 object at 0.2 albedo, so the figures vary between regimes only through range. Real objects span orders of magnitude in size and brightness. Enter a target magnitude to override it.
 * **Full phase assumed.** The derived magnitude uses a phase factor of 1.0, the brightest case. A target near quadrature is roughly a magnitude fainter.
 * **Sky brightness is a single number.** No dependence on elevation, moon phase or airmass, and no extinction term.
-* **No saturation model.** Detector full-well depth is not modeled, so bright LEO targets report implausibly high SNR. The check reports these as "detection is not the limiting factor" rather than as a number to act on.
+* **Simple saturation model.** The saturation check compares the brightest pixel (star centred on a pixel, light spread along any trail) with 80% of the full well. It ignores bias, dark current and an ADC that clips before the well fills, and the detection SNR itself is still computed as if the detector were linear. See [step 7 of page 10](10-target-brightness-and-detection.md#step-7-saturation).
 * **Photometric defaults are generic.** When QE, throughput, sky brightness or read noise are not entered, documented generic values are substituted and the detection check is capped at WARN. It will never report PASS on a quantum efficiency it assumed.
 * **Hand-entered values are range-checked.** A photometric or dynamics value outside a plausible range (a QE above 1, a NaN, a sky brightness of 2.1 where 21.0 was meant) is treated as not entered rather than trusted, so a typo degrades the report instead of corrupting it.
 

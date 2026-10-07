@@ -150,6 +150,16 @@ impl PsfBudget {
         PsfCalculator::peak_pixel_fraction(self.sampled_fwhm(at) / self.plate_scale, offset, offset)
     }
 
+    /// Fraction of a star's light in its brightest native pixel when it is
+    /// centred on a pixel and trailed by `trail_arcsec` during the exposure.
+    /// The saturation check uses this: centred is the brightest case.
+    pub fn trailed_peak_pixel_fraction(&self, at: FieldPoint, trail_arcsec: f64) -> f64 {
+        PsfCalculator::trailed_peak_pixel_fraction(
+            self.sampled_fwhm(at) / self.plate_scale,
+            trail_arcsec / self.plate_scale,
+        )
+    }
+
     /// Name of the largest term at a field point.
     pub fn largest_term(&self, at: FieldPoint) -> &'static str {
         [
@@ -198,6 +208,7 @@ mod tests {
             height_px: 6388,
             read_noise_e: None,
             qe: None,
+            full_well_e: None,
             mtf_nyquist,
             shutter: Shutter::Global,
             weight_lb: None,

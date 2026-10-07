@@ -64,6 +64,37 @@ impl PsfCalculator {
         Self::pixel_fraction_1d(sigma, dx_px) * Self::pixel_fraction_1d(sigma, dy_px)
     }
 
+    /// Fraction of a 1-D Gaussian (sigma in pixels) that lands in the brightest
+    /// pixel when the image is smeared uniformly along a trail `trail_px` long,
+    /// with the trail centred on that pixel.
+    ///
+    /// The trailed profile is (1/L) [Phi((x + L/2)/sigma) - Phi((x - L/2)/sigma)].
+    /// Integrating it over the pixel uses the antiderivative of the Gaussian
+    /// CDF, G(x) = x Phi(x/sigma) + sigma phi(x/sigma). A trail shorter than a
+    /// thousandth of a pixel is treated as no trail.
+    pub fn trailed_fraction_1d(sigma_px: f64, trail_px: f64) -> f64 {
+        if trail_px < 1e-3 {
+            return Self::pixel_fraction_1d(sigma_px, 0.0);
+        }
+        let g = |x: f64| {
+            let u = x / sigma_px;
+            x * normal_cdf(u) + sigma_px * normal_pdf(u)
+        };
+        let h = trail_px / 2.0;
+        (g(0.5 + h) - g(-0.5 + h) - g(0.5 - h) + g(-0.5 - h)) / trail_px
+    }
+
+    /// Fraction of a star's light in its brightest pixel when the star is
+    /// centred on a pixel and trailed along a pixel row by `trail_px`. With no
+    /// trail this is `peak_pixel_fraction(fwhm_px, 0, 0)`.
+    ///
+    /// As with `peak_pixel_fraction`, the FWHM is the image before the pixel
+    /// aperture.
+    pub fn trailed_peak_pixel_fraction(fwhm_px: f64, trail_px: f64) -> f64 {
+        let sigma = fwhm_px / FWHM_PER_SIGMA;
+        Self::pixel_fraction_1d(sigma, 0.0) * Self::trailed_fraction_1d(sigma, trail_px)
+    }
+
     /// One-sigma centroid precision per axis, in the units of `fwhm`, for a
     /// Gaussian star measured at the given SNR: sigma_psf / SNR.
     ///
@@ -72,6 +103,16 @@ impl PsfCalculator {
     pub fn centroid_sigma(fwhm: f64, snr: f64) -> f64 {
         fwhm / FWHM_PER_SIGMA / snr
     }
+}
+
+/// Standard normal cumulative distribution.
+fn normal_cdf(u: f64) -> f64 {
+    0.5 * (1.0 + erf(u / SQRT_2))
+}
+
+/// Standard normal density.
+fn normal_pdf(u: f64) -> f64 {
+    (-0.5 * u * u).exp() / (2.0 * PI).sqrt()
 }
 
 /// Error function, Abramowitz and Stegun 7.1.26 (absolute error below 1.5e-7).
@@ -145,6 +186,53 @@ mod tests {
         // so 0.1972 centred. On a corner each 1-D share is erf(1 / (sqrt 2 x sigma)) / 2 = 0.3805.
         assert!(close(PsfCalculator::peak_pixel_fraction(2.0, 0.0, 0.0), 0.1972, 0.0005));
         assert!(close(PsfCalculator::peak_pixel_fraction(2.0, 0.5, 0.5), 0.1449, 0.0005));
+    }
+
+    #[test]
+    fn an_untrailed_star_matches_the_peak_pixel_fraction() {
+        for fwhm in [0.5, 2.0, 4.0] {
+            assert!(close(
+                PsfCalculator::trailed_peak_pixel_fraction(fwhm, 0.0),
+                PsfCalculator::peak_pixel_fraction(fwhm, 0.0, 0.0),
+                1e-12
+            ));
+        }
+    }
+
+    #[test]
+    fn a_tiny_trail_is_continuous_with_no_trail() {
+        // Either side of the 1e-3 px cut-over must agree, or the closed form
+        // is losing precision to cancellation.
+        let sigma = 2.0 / FWHM_PER_SIGMA;
+        let none = PsfCalculator::pixel_fraction_1d(sigma, 0.0);
+        let tiny = PsfCalculator::trailed_fraction_1d(sigma, 1.01e-3);
+        assert!(close(tiny, none, 1e-5), "{tiny} vs {none}");
+    }
+
+    #[test]
+    fn a_long_trail_spreads_the_light_over_its_length() {
+        // Far longer than the star, each pixel along the trail gets 1/L of
+        // the light along the trail: 100 px gives 0.01 of the 1-D share.
+        let sigma = 2.0 / FWHM_PER_SIGMA;
+        assert!(close(PsfCalculator::trailed_fraction_1d(sigma, 100.0), 0.01, 1e-6));
+        let across = PsfCalculator::pixel_fraction_1d(sigma, 0.0);
+        assert!(close(PsfCalculator::trailed_peak_pixel_fraction(2.0, 100.0), across * 0.01, 1e-7));
+    }
+
+    #[test]
+    fn a_sharp_star_trailed_two_pixels_puts_half_in_the_centre_pixel() {
+        // A point trailed over [-1, 1] spends half its time in [-0.5, 0.5].
+        assert!(close(PsfCalculator::trailed_fraction_1d(1e-4, 2.0), 0.5, 1e-6));
+    }
+
+    #[test]
+    fn trailing_only_ever_lowers_the_peak() {
+        let mut last = PsfCalculator::trailed_peak_pixel_fraction(3.0, 0.0);
+        for trail in [0.01, 0.1, 0.5, 1.0, 3.0, 10.0, 1000.0] {
+            let f = PsfCalculator::trailed_peak_pixel_fraction(3.0, trail);
+            assert!(f < last, "trail {trail}: {f} not below {last}");
+            last = f;
+        }
     }
 
     #[test]

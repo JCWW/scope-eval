@@ -32,6 +32,8 @@ pub(crate) struct CameraDto {
     #[serde(default)]
     qe: Option<f64>,
     #[serde(default)]
+    full_well_e: Option<f64>,
+    #[serde(default)]
     mtf_nyquist: Option<f64>,
     shutter: ShutterDto,
     weight_lb: Option<f64>,
@@ -47,6 +49,7 @@ impl From<CameraDto> for Camera {
             height_px: dto.height_px,
             read_noise_e: dto.read_noise_e,
             qe: dto.qe,
+            full_well_e: dto.full_well_e,
             mtf_nyquist: dto.mtf_nyquist,
             shutter: dto.shutter.into(),
             weight_lb: dto.weight_lb,

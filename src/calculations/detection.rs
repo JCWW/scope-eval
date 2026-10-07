@@ -77,6 +77,40 @@ impl DetectionCalculator {
         }
     }
 
+    /// Brightest magnitude whose peak pixel stays below `well_e` over an
+    /// exposure: the bright end of the linear range. `signal_coefficient` is
+    /// for that exposure and `sky_px_e` is the sky one pixel collects in it.
+    /// `None` when the sky alone fills the well.
+    pub fn brightest_unsaturated_mag(
+        well_e: f64,
+        sky_px_e: f64,
+        signal_coefficient: f64,
+        peak_pixel_fraction: f64,
+    ) -> Option<f64> {
+        let room = well_e - sky_px_e;
+        (room > 0.0).then(|| -2.5 * (room / (signal_coefficient * peak_pixel_fraction)).log10())
+    }
+
+    /// Shortest exposure at which `peak_e(t)` reaches `level_e`, found by
+    /// bisection on (0, `t_max_s`]. `peak_e` must not decrease with exposure.
+    /// `None` when even `t_max_s` stays below the level, which happens when a
+    /// trailing target never dwells on one pixel long enough.
+    pub fn exposure_to_reach_s(level_e: f64, peak_e: impl Fn(f64) -> f64, t_max_s: f64) -> Option<f64> {
+        if peak_e(t_max_s) < level_e {
+            return None;
+        }
+        let (mut lo, mut hi) = (0.0, t_max_s);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if peak_e(mid) < level_e {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Some(hi)
+    }
+
     /// Faintest magnitude that reaches the requested SNR threshold.
     pub fn limiting_mag(threshold: f64, noise_variance_e2: f64, signal_coefficient: f64) -> f64 {
         let t2 = threshold * threshold;
@@ -123,6 +157,25 @@ mod tests {
             DetectionCalculator::trail_limited_exposure_s(2.5, 0.0),
             30.0
         );
+    }
+
+    #[test]
+    fn brightest_unsaturated_mag_just_fills_the_well() {
+        // GEO worked example: 30 s, centred peak fraction 5% (a 4-px star).
+        let k = DetectionCalculator::signal_coefficient(0.0660, 0.80, 0.85, 30.0);
+        let sky_px = DetectionCalculator::sky_e_per_px_s(21.0, 0.7386, 0.0660, 0.80, 0.85) * 30.0;
+        let m = DetectionCalculator::brightest_unsaturated_mag(20_000.0, sky_px, k, 0.05).unwrap();
+        let peak = k * 10f64.powf(-0.4 * m) * 0.05 + sky_px;
+        assert!(close(peak, 20_000.0, 1e-6));
+        // A sky that fills the well leaves no linear range at all.
+        assert_eq!(DetectionCalculator::brightest_unsaturated_mag(20.0, 26.0, k, 0.05), None);
+    }
+
+    #[test]
+    fn exposure_to_reach_inverts_a_linear_ramp() {
+        let t = DetectionCalculator::exposure_to_reach_s(1000.0, |t| 250.0 * t, 30.0).unwrap();
+        assert!(close(t, 4.0, 1e-9));
+        assert_eq!(DetectionCalculator::exposure_to_reach_s(1e6, |t| 250.0 * t, 30.0), None);
     }
 
     #[test]

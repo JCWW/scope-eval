@@ -367,6 +367,7 @@ mod tests {
             height_px: 6388,
             read_noise_e: None,
             qe: None,
+            full_well_e: None,
             mtf_nyquist: None,
             shutter: Shutter::Global,
             weight_lb: None,

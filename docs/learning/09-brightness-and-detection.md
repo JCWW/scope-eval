@@ -170,7 +170,7 @@ For the DeltaRho 350 (0.0660 m^2, 0.7386 "/px) with an IMX455 at 2.5" seeing, 21
 
 **Grading.** PASS at SNR >= 10, WARN at >= 5, FAIL below. If QE, throughput, sky or read noise were assumed rather than entered, the check is capped at WARN and lists what it assumed. If an entered exposure trails the target off the sensor, the check won't PASS either.
 
-**Saturation is not modeled.** A LEO target at SNR 38,900 would saturate the detector in a real 30 s exposure. That's why "trivial" means "choose your exposure for timing and saturation instead".
+**Too bright is a problem too.** A LEO target at SNR 38,900 floods its brightest pixel many times over in a 30 s exposure. That's why "trivial" means "choose your exposure for timing and saturation instead", and the separate saturation check reports the longest exposure that stays linear ([step 7 of page 10](../10-target-brightness-and-detection.md#step-7-saturation)).
 
 **Centroid precision.** The check also prints how precisely the target's position can be measured: sigma = star FWHM / 2.355 / SNR per axis. At GEO that is 3.03 / 2.355 / 526 = 2.4 milliarcseconds. It is the photon-limited best case; sky, read noise and coarse pixels all make the real figure worse.
 

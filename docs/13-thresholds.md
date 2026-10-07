@@ -42,10 +42,12 @@ These are engineering rules of thumb, not physical laws. If your mission needs a
 | `DETECT_SNR_THRESHOLD` | 5.0 | System | SNR at which a target counts as detected |
 | `SNR_PASS` | 10.0 | System | SNR for comfortable detection |
 | `SNR_TRIVIAL` | 100.0 | System | Above this, detection is simply not what limits the regime |
+| `SATURATION_WARN_FRACTION` | 0.8 | System | Peak pixel above this fraction of full well is nonlinear |
+| `MIN_PRACTICAL_EXPOSURE_S` | 0.001 s | System | Saturating even at this exposure is a FAIL |
 
 ## Default assumptions
 
-These are substituted when an input is left blank. QE, throughput, sky brightness, read noise, pointing and settle time are named in the report when assumed. Seeing and timestamp accuracy are only prompt defaults, the wavelength is never flagged, and the reference target shows up only as a magnitude marked "(derived)".
+These are substituted when an input is left blank. QE, throughput, sky brightness, read noise, full well, pointing and settle time are named in the report when assumed. Seeing and timestamp accuracy are only prompt defaults, the wavelength is never flagged, and the reference target shows up only as a magnitude marked "(derived)".
 
 | Constant | Default | Used for |
 |---|---|---|
@@ -60,6 +62,7 @@ These are substituted when an input is left blank. QE, throughput, sky brightnes
 | `DEFAULT_THROUGHPUT` | 0.85 | Detection |
 | `DEFAULT_SKY_MAG_ARCSEC2` | 21.0 | Detection |
 | `DEFAULT_READ_NOISE_E` | 3.0 e- | Detection |
+| `DEFAULT_FULL_WELL_E` | 20,000 e- | Saturation |
 | `MAX_EXPOSURE_S` | 30 s | Exposure cap |
 | `DEFAULT_SLEW_DISTANCE_DEG` | 90 deg | Slew and settle |
 | `DEFAULT_SETTLE_TIME_S` | 2.0 s | Slew and settle |

@@ -375,7 +375,7 @@ The default seeing (`DEFAULT_SEEING_ARCSEC`, 2.5") and reference wavelength (`DE
 * **One representative target.** Derived magnitudes assume a 10 m^2 object at 0.2 albedo, so the figures vary between regimes only through range. Real objects span orders of magnitude in size and brightness. Enter a target magnitude to override it.
 * **Full phase assumed.** The derived magnitude uses a phase factor of 1.0, the brightest case. A target near quadrature is roughly a magnitude fainter.
 * **Sky brightness is a single number.** No dependence on elevation, moon phase or airmass, and no extinction term.
-* **No saturation model.** Detector full-well depth is not modeled, so bright LEO targets report implausibly high SNR. The check reports these as "detection is not the limiting factor" rather than as a number to act on.
+* **Simple saturation model.** The saturation check compares the brightest pixel (star centred on a pixel, light spread along any trail) with 80% of the full well. It ignores bias, dark current and an ADC that clips before the well fills, and the detection SNR itself is still computed as if the detector were linear. See [step 7 of page 10](docs/10-target-brightness-and-detection.md#step-7-saturation).
 * **Servo behaviour is still not modeled.** The acceleration model covers peak axis acceleration, the acceleration-limited keyhole and slew timing. Servo bandwidth, closed-loop following error and path-following smoothness are not included, because vendors do not publish the inputs.
 * **Slew distance is assumed.** The slew-and-settle check uses a 90-degree acquisition slew and, where the mount does not publish one, a 2-second settle.
 * **Photometric defaults are generic.** When QE, throughput, sky brightness or read noise are not entered, documented generic values are substituted and the detection check is capped at WARN. It will never report PASS on a quantum efficiency it assumed.
@@ -432,7 +432,7 @@ PlaneWave publishes no corrected image circle for the RC20, RC24, RC700 or the I
 
 **Cameras**
 
-No preset carries a quantum efficiency or read-noise figure. Both vary with gain, mode and vendor binning for the same sensor, so entering a single number from a QE curve would be inventing data. The detection check assumes 0.80 and 3 e- and says so. No preset carries a detector MTF either, so the point spread function counts the pixel aperture but no charge diffusion, and the report says so. Enter `mtf_nyquist` from a measured MTF curve if you have one ([page 17](docs/17-point-spread-function.md)).
+No preset carries a quantum efficiency, read-noise or full-well figure. All three vary with gain, mode and vendor binning for the same sensor, so entering a single number would be inventing data. The detection check assumes 0.80 and 3 e-, the saturation check assumes a 20,000 e- well, and both say so. No preset carries a detector MTF either, so the point spread function counts the pixel aperture but no charge diffusion, and the report says so. Enter `mtf_nyquist` from a measured MTF curve if you have one ([page 17](docs/17-point-spread-function.md)).
 
 
 | Preset | Pixel (um) | Pixels | Shutter | Notes |
