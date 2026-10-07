@@ -23,7 +23,8 @@ Point spread function (every term a Gaussian FWHM, added in quadrature)
    Centroid          sigma = recorded FWHM / 2.355 / SNR  (photon-limited)
  5 Effective area    pi/4 x D^2 x (1 - obstruction_by_diameter^2)
    Depth             dMag = 2.5 x log10(area / reference area)
- 6 Field of view     FOV (deg) = sensor (mm) / focal length (mm) x 57.3
+ 6 True FOV, exact   TFOV (deg) = 2 x atan(sensor (mm) / (2 x focal length (mm))) x 57.2958
+   True FOV, approx  TFOV (deg) = sensor (mm) / focal length (mm) x 57.2958   (small-angle; used downstream)
    Search speed      etendue = effective area x field area
  7 Focus tolerance   CFZ = +/- 2.44 x wavelength x N^2,  N = FL / D
  8 Payload           (OTA + camera + accessories) / mount rating  (keep <= 70%)

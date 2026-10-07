@@ -22,6 +22,7 @@ src/
   constants.rs every named constant: physical constants, default assumptions, judgment thresholds
   checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
+  equations.rs formatting for the substituted equations and status rules each check records
   photometry.rs  photometric inputs with defaults substituted, and which defaults were assumed
   psf.rs       the system point spread function budget behind checks 2 and 3 and detection
   passes.rs    orbit source to propagator, stale-TLE note, per-pass "Mount can follow?" judgment
@@ -32,7 +33,7 @@ src/
     regime_details.rs  every regime check with its numbers
     passes.rs          the pass table
     formulas.rs        the formula summary
-  main.rs      the scope-eval binary: arguments, --help, and dispatch to cli/
+  main.rs      the scope-eval binary: arguments (--demo, --equations, --help), and dispatch to cli/
   cli/         the command-line front end; the only code that reads input or prints
     interactive.rs     the main menu loop and pass prediction
     prompts.rs         prompts that build configurations, sites and orbits
@@ -62,6 +63,7 @@ dashboard/          React + Material UI dashboard that runs and visualizes the s
 * The code is layered. The `scope_eval` library (`src/lib.rs`) holds the model, the physics, the judgments and the report text, and never reads input or prints. Reports are `Display` types such as `EvaluationReport` and `ComparisonReport`, so any front end can call `.to_string()` on them. The binary (`src/main.rs` and `src/cli/`) only parses arguments, prompts, and prints those reports.
 * Each `calculations/` module groups related equations in a small calculator type. For example, `OpticsCalculator` contains plate-scale and field-of-view equations, while `MountDynamicsCalculator` contains tracking and slew equations. Calculator methods are pure and covered by worked-example tests.
 * The calculators contain physics and math only. `checks.rs` and `regimes.rs` apply engineering thresholds to those results and return human-readable check results ([page 4](04-how-an-evaluation-works.md#physics-versus-judgment)).
+* Each check result also carries `equations`: the equations behind its details with the values substituted, built with the helpers in `equations.rs` from the same variables the check judged, and ending with a `Rule:` line naming the threshold band that set the status. The reports print them only in the `ReportStyle::WithEquations` style. When you add or change a check, add its equations and rule too: a test fails if any check's last equation is not a rule naming its status.
 * Each general `check_*` function returns a `CheckResult` (status, detail lines, verdict) and is independent of how results are displayed.
 * `evaluate_all` enforces the "first configuration is the reference" rule in one place.
 * `evaluate` runs the eight checks, then calls `evaluate_regimes` in `regimes.rs`, which reuses the computed plate scale, bin, field and area. Regime results are stored on the `Evaluation`.

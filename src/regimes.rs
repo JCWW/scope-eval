@@ -10,6 +10,7 @@
 //! in docs/08-orbital-regimes.md. Change them in `regimes()` to match your own catalog.
 
 use crate::checks::{kv, Evaluation, Status};
+use crate::equations::{eq, num, rule, short};
 use crate::calculations::camera::CameraTimingCalculator;
 use crate::calculations::detection::DetectionCalculator;
 use crate::calculations::mount::MountDynamicsCalculator;
@@ -20,7 +21,8 @@ use crate::constants::{
     regimes_limits as limits, ARCSEC_PER_DEGREE, ARCSEC_PER_RADIAN, DEFAULT_FULL_WELL_E,
     DEFAULT_POINTING_RMS_ARCSEC, DEFAULT_PHASE_FACTOR, DEFAULT_SETTLE_TIME_S,
     DEFAULT_SLEW_DISTANCE_DEG, DEG_PER_RADIAN, EARTH_RADIUS_KM, MAS_PER_ARCSEC, MAX_EXPOSURE_S,
-    REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2, SIDEREAL_RATE_ARCSEC_PER_S,
+    PEAK_ACCEL_COEFF, PHOTONS_M2_S_MAG0, REFERENCE_TARGET_ALBEDO, REFERENCE_TARGET_CROSS_SECTION_M2,
+    SIDEREAL_RATE_ARCSEC_PER_S, SUN_APPARENT_MAG,
 };
 use crate::constants::plausible_ranges as ranges;
 use crate::photometry::Photometry;
@@ -189,7 +191,20 @@ pub struct RegimeCheck {
     pub title: &'static str,
     pub status: Status,
     pub details: Vec<String>,
+    /// The equations behind the details, values substituted, ending with the
+    /// rule that set the status (see `equations.rs`).
+    pub equations: Vec<String>,
     pub verdict: String,
+}
+
+/// "PASS >= a > WARN >= b > FAIL" for a quantity where larger is better.
+fn bands_higher(pass: f64, warn: f64, unit: &str) -> String {
+    format!("PASS >= {}{unit} > WARN >= {}{unit} > FAIL", short(pass), short(warn))
+}
+
+/// "PASS <= a < WARN <= b < FAIL" for a quantity where smaller is better.
+fn bands_lower(pass: f64, warn: f64, unit: &str) -> String {
+    format!("PASS <= {}{unit} < WARN <= {}{unit} < FAIL", short(pass), short(warn))
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +281,28 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
         kv("Half of the field's short side", fmt_angle(half_field)),
         kv("Acquisition margin", format!("{margin:.1}x  (target {:.0}x)", limits::ACQ_PASS_MARGIN)),
     ];
+    let short_deg = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg);
+    let mut equations = vec![
+        eq(
+            "Prediction error",
+            "ephemeris error (km) / range (km) x 206264.806",
+            format!("{} / {} x {}", num(r.ephemeris_uncertainty_km), num(r.range_km), ARCSEC_PER_RADIAN.to_string()),
+            format!("{}\"", num(ephem_arcsec)),
+        ),
+        eq(
+            "Position error to cover",
+            "prediction error + pointing error",
+            format!("{} + {}{}", num(ephem_arcsec), num(pointing), if assumed { " (assumed)" } else { "" }),
+            format!("{}\"", num(needed)),
+        ),
+        eq(
+            "Half the short side",
+            "min(TFOV w, TFOV h) (deg) x 3600 / 2",
+            format!("{} x 3600 / 2", num(short_deg)),
+            format!("{}\"", num(half_field)),
+        ),
+        eq("Acquisition margin", "half short side / position error", format!("{} / {}", num(half_field), num(needed)), format!("{}x", num(margin))),
+    ];
     let (status, verdict) = if margin >= limits::ACQ_PASS_MARGIN {
         (Status::Pass, "The field comfortably covers the expected position error.".to_string())
     } else if margin >= limits::ACQ_WARN_MARGIN {
@@ -279,7 +316,12 @@ fn telescope_acquisition(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeChe
             "The expected position error is larger than the field. Plan on searching, or use a wider-field finder.".to_string(),
         )
     };
-    RegimeCheck { component: Component::Telescope, title: "Acquisition field", status, details, verdict }
+    equations.push(rule(
+        bands_higher(limits::ACQ_PASS_MARGIN, limits::ACQ_WARN_MARGIN, "x"),
+        format!("margin = {}x", num(margin)),
+        status,
+    ));
+    RegimeCheck { component: Component::Telescope, title: "Acquisition field", status, details, equations, verdict }
 }
 
 /// How long an untracked target stays in the field (informational).
@@ -298,11 +340,25 @@ fn telescope_dwell(ev: &Evaluation, r: &Regime) -> RegimeCheck {
             fmt_duration(dwell)
         )
     };
+    let equations = vec![
+        if r.rate_vs_ground > 0.0 {
+            eq(
+                "Time to cross",
+                "short side (\") / rate vs ground (\"/s)",
+                format!("{} / {}", num(short_side), num(r.rate_vs_ground)),
+                format!("{} s", num(dwell)),
+            )
+        } else {
+            "Time to cross: rate vs ground is 0, so the target never leaves the field".to_string()
+        },
+        rule("not graded (informational)".into(), "field dwell".into(), Status::Info),
+    ];
     RegimeCheck {
         component: Component::Telescope,
         title: "Field dwell (untracked)",
         status: Status::Info,
         details: vec![kv("Target rate vs ground", fmt_rate(r.rate_vs_ground)), kv("Time to cross the field", fmt_duration(dwell))],
+        equations,
         verdict,
     }
 }
@@ -310,17 +366,24 @@ fn telescope_dwell(ev: &Evaluation, r: &Regime) -> RegimeCheck {
 /// What limits detection in this regime, with this telescope's depth (informational).
 fn telescope_depth(ev: &Evaluation, r: &Regime, reference_area: Option<f64>) -> RegimeCheck {
     let mut details = vec![kv("Effective collecting area", format!("{:.4} m^2", ev.metrics.effective_area_m2))];
+    let mut equations = Vec::new();
     if let Some(ra) = reference_area {
-        details.push(kv(
+        let dm = OpticsCalculator::delta_mag(ev.metrics.effective_area_m2, ra);
+        details.push(kv("Depth vs reference", format!("{dm:+.2} mag")));
+        equations.push(eq(
             "Depth vs reference",
-            format!("{:+.2} mag", OpticsCalculator::delta_mag(ev.metrics.effective_area_m2, ra)),
+            "2.5 x log10(area / reference area)",
+            format!("2.5 x log10({} / {})", num(ev.metrics.effective_area_m2), num(ra)),
+            format!("{dm:+.4} mag"),
         ));
     }
+    equations.push(rule("not graded (informational)".into(), "depth".into(), Status::Info));
     RegimeCheck {
         component: Component::Telescope,
         title: "Depth relevance",
         status: Status::Info,
         details,
+        equations,
         verdict: format!("Detection in this regime is usually limited by {}.", r.limiting_factor),
     }
 }
@@ -373,6 +436,27 @@ fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             ),
         ),
     ];
+    let bin = ev.metrics.recommended_bin;
+    let mut equations = vec![
+        eq(
+            "Binned scale",
+            "plate scale x bin",
+            format!("{} x {bin}", num(ev.metrics.plate_scale)),
+            format!("{}\"/px", num(binned)),
+        ),
+        eq(
+            "Timing needed",
+            &format!("{} x binned scale / rate vs stars", limits::TIMING_PIXEL_FRACTION),
+            format!("{} x {} / {}", limits::TIMING_PIXEL_FRACTION, num(binned), num(r.rate_vs_stars)),
+            format!("{} s", num(required_s)),
+        ),
+        eq(
+            "Position error",
+            "rate vs stars x timestamp error",
+            format!("{} x {}", num(r.rate_vs_stars), num(actual_s)),
+            format!("{}\" = {} px", num(error_arcsec), num(error_arcsec / binned)),
+        ),
+    ];
     let (status, verdict) = if actual_s <= required_s {
         (Status::Pass, "Timing error is within the budget of a quarter binned pixel.".to_string())
     } else if actual_s <= limits::TIMING_WARN_MULTIPLE * required_s {
@@ -389,7 +473,17 @@ fn camera_timing(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             ),
         )
     };
-    RegimeCheck { component: Component::Camera, title: "Timestamp accuracy", status, details, verdict }
+    equations.push(rule(
+        format!(
+            "PASS if timestamp error <= needed ({} s), WARN if <= {} x needed ({} s), else FAIL",
+            num(required_s),
+            limits::TIMING_WARN_MULTIPLE,
+            num(limits::TIMING_WARN_MULTIPLE * required_s)
+        ),
+        format!("timestamp error = {} s", num(actual_s)),
+        status,
+    ));
+    RegimeCheck { component: Component::Camera, title: "Timestamp accuracy", status, details, equations, verdict }
 }
 
 /// How much does row-by-row readout distort positions at this regime's rate?
@@ -405,6 +499,7 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             title: "Shutter skew",
             status: Status::Pass,
             details: vec![kv("Shutter", "global".to_string())],
+            equations: vec![rule("PASS for a global shutter (skew = 0)".into(), "global".into(), Status::Pass)],
             verdict: "Every row is exposed at once, so there is no readout skew at any rate.".to_string(),
         },
         Shutter::Rolling { line_time_us: None } => RegimeCheck {
@@ -412,6 +507,11 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
             title: "Shutter skew",
             status: Status::Warn,
             details: vec![kv("Shutter", "rolling, line time unknown".to_string())],
+            equations: vec![rule(
+                "WARN for a rolling shutter with no published line time".into(),
+                "line time unknown".into(),
+                Status::Warn,
+            )],
             verdict: "Ask the vendor for the line time to size the readout skew (skew = rows x line time).".to_string(),
         },
         Shutter::Rolling { line_time_us: Some(lt) } => {
@@ -440,7 +540,37 @@ fn camera_shutter(cfg: &Config, ev: &Evaluation, r: &Regime) -> RegimeCheck {
                     "The target moves a large fraction of the frame during readout. Use a global-shutter camera or a small region-of-interest readout.".to_string(),
                 )
             };
-            RegimeCheck { component: Component::Camera, title: "Shutter skew", status, details, verdict }
+            let equations = vec![
+                eq(
+                    "Readout time",
+                    "rows x line time (us) / 1e6",
+                    format!("{} x {} / 1e6", c.height_px, num(lt)),
+                    format!("{} s", num(readout_s)),
+                ),
+                eq(
+                    "Skew",
+                    "rate vs stars x readout time",
+                    format!("{} x {}", num(r.rate_vs_stars), num(readout_s)),
+                    format!("{}\"", num(skew)),
+                ),
+                eq("Skew in pixels", "skew / binned scale", format!("{} / {}", num(skew), num(binned)), format!("{} px", num(skew_px))),
+                eq(
+                    "Fraction of frame height",
+                    "skew / (TFOV h x 3600)",
+                    format!("{} / {}", num(skew), num(frame_h)),
+                    format!("{}%", num(frac * 100.0)),
+                ),
+                rule(
+                    format!(
+                        "PASS if skew <= {} px, WARN (correctable) if skew <= {}% of frame height, else FAIL",
+                        limits::SKEW_NEGLIGIBLE_PX,
+                        short(limits::SKEW_FAIL_FRAME_FRACTION * 100.0)
+                    ),
+                    format!("skew = {} px, {}% of frame", num(skew_px), num(frac * 100.0)),
+                    status,
+                ),
+            ];
+            RegimeCheck { component: Component::Camera, title: "Shutter skew", status, details, equations, verdict }
         }
     }
 }
@@ -454,10 +584,21 @@ fn camera_trailing(ev: &Evaluation, r: &Regime) -> RegimeCheck {
     );
     let t_cross = CameraTimingCalculator::crossing_time_s(star, r.rate_vs_stars);
     let streak_px = CameraTimingCalculator::pixels_per_second(r.rate_vs_stars, binned);
+    let equations = vec![
+        eq(
+            "Time to cross one star",
+            "recorded star FWHM / rate vs stars",
+            format!("{} / {}", num(star), num(r.rate_vs_stars)),
+            format!("{} s", num(t_cross)),
+        ),
+        eq("Streak per second", "rate vs stars / binned scale", format!("{} / {}", num(r.rate_vs_stars), num(binned)), format!("{} px", num(streak_px))),
+        rule("not graded (informational)".into(), "trailing".into(), Status::Info),
+    ];
     RegimeCheck {
         component: Component::Camera,
         title: "Exposure vs trailing",
         status: Status::Info,
+        equations,
         details: vec![
             kv("Relative motion crosses one star FWHM in", fmt_duration(t_cross)),
             kv("Streak length per second of exposure", format!("{streak_px:.0} px (binned)")),
@@ -479,41 +620,58 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
     let required_deg_s = r.rate_vs_ground / ARCSEC_PER_DEGREE;
     let mount = cfg.payload.mount.as_ref();
     let mut details = vec![kv("Required rate (vs ground)", fmt_rate(r.rate_vs_ground))];
+    let mut equations = vec![eq(
+        "Required rate",
+        "rate vs ground (\"/s) / 3600",
+        format!("{} / 3600", num(r.rate_vs_ground)),
+        format!("{} deg/s", num(required_deg_s)),
+    )];
 
     if r.mode == TrackingMode::Stare {
         details.push(kv("Mode", "stare: tracking off".to_string()));
+        equations.push(rule("PASS in stare mode (tracking off)".into(), "stare".into(), Status::Pass));
         return RegimeCheck {
             component: Component::Mount,
             title: "Tracking rate",
             status: Status::Pass,
             details,
+            equations,
             verdict: "The target is Earth-fixed. The mount only needs to point and hold still.".to_string(),
         };
     }
 
     let Some(m) = mount else {
+        equations.push(rule("INFO with no mount selected".into(), "no mount".into(), Status::Info));
         return RegimeCheck {
             component: Component::Mount,
             title: "Tracking rate",
             status: Status::Info,
             details,
+            equations,
             verdict: "No mount selected.".to_string(),
         };
     };
     let Some(max) = plausible(m.max_slew_deg_s, ranges::SLEW_RATE_MIN_DEG_S, ranges::SLEW_RATE_MAX_DEG_S)
     else {
         let status = if required_deg_s > limits::RATE_MATTERS_DEG_S { Status::Warn } else { Status::Info };
+        equations.push(rule(
+            format!("maximum rate unknown: WARN if required > {} deg/s, else INFO", limits::RATE_MATTERS_DEG_S),
+            format!("required = {} deg/s", num(required_deg_s)),
+            status,
+        ));
         return RegimeCheck {
             component: Component::Mount,
             title: "Tracking rate",
             status,
             details,
+            equations,
             verdict: format!("Maximum axis rate for {} is unknown. Ask the vendor.", m.name),
         };
     };
 
     let headroom = max / required_deg_s;
     details.push(kv("Mount maximum axis rate", format!("{max:.1} deg/s  (headroom {headroom:.0}x)")));
+    equations.push(eq("Rate headroom", "max axis rate / required", format!("{} / {}", num(max), num(required_deg_s)), format!("{}x", num(headroom))));
     let mut status = if headroom >= limits::RATE_PASS_HEADROOM {
         Status::Pass
     } else if headroom >= limits::RATE_WARN_HEADROOM {
@@ -521,6 +679,13 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
     } else {
         Status::Fail
     };
+    let headroom_status = status;
+    let mut rules = vec![format!(
+        "headroom: {} (here {}x -> {})",
+        bands_higher(limits::RATE_PASS_HEADROOM, limits::RATE_WARN_HEADROOM, "x"),
+        num(headroom),
+        headroom_status.word()
+    )];
     let mut verdict = match status {
         Status::Pass => "Ample rate headroom.".to_string(),
         Status::Warn => "The mount can keep up, but with little margin for acceleration and corrections.".to_string(),
@@ -543,6 +708,28 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
             .map(f64::to_radians);
             let (z_min_rad, binding) = MountDynamicsCalculator::keyhole_rad(omega_rad, max.to_radians(), accel_rad);
             let elev = 90.0 - z_min_rad.to_degrees();
+            let z_rate = omega_rad / max.to_radians();
+            equations.push(eq(
+                "Rate keyhole",
+                "z = omega / max rate (both rad/s)",
+                format!("{} / {}", num(omega_rad), num(max.to_radians())),
+                format!("{} rad = {} deg", num(z_rate), num(z_rate.to_degrees())),
+            ));
+            if let Some(a) = accel_rad {
+                let z_accel = MountDynamicsCalculator::accel_limited_keyhole_rad(omega_rad, a);
+                equations.push(eq(
+                    "Acceleration keyhole",
+                    &format!("z = omega x sqrt({} / max accel (rad/s^2))", format!("{PEAK_ACCEL_COEFF:.6}")),
+                    format!("{} x sqrt({} / {})", num(omega_rad), format!("{PEAK_ACCEL_COEFF:.6}"), num(a)),
+                    format!("{} rad = {} deg", num(z_accel), num(z_accel.to_degrees())),
+                ));
+            }
+            equations.push(eq(
+                "Highest followable pass",
+                &format!("90 - z (the larger keyhole: {binding})"),
+                format!("90 - {}", num(z_min_rad.to_degrees())),
+                format!("{} deg", num(elev)),
+            ));
             details.push(kv("Highest pass followable (alt-az keyhole)", format!("{elev:.1} deg elevation")));
             details.push(kv("Keyhole set by", format!("{binding} limit")));
             let k = if elev >= limits::KEYHOLE_PASS_ELEV_DEG {
@@ -552,6 +739,12 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
             } else {
                 Status::Fail
             };
+            rules.push(format!(
+                "keyhole: {} (here {} deg -> {})",
+                bands_higher(limits::KEYHOLE_PASS_ELEV_DEG, limits::KEYHOLE_WARN_ELEV_DEG, " deg"),
+                num(elev),
+                k.word()
+            ));
             if k > status {
                 status = k;
             }
@@ -565,7 +758,8 @@ fn mount_rate(cfg: &Config, r: &Regime) -> RegimeCheck {
         )),
         MountType::Unknown => details.push(kv("Keyhole", "mount type unknown".to_string())),
     }
-    RegimeCheck { component: Component::Mount, title: "Tracking rate", status, details, verdict }
+    equations.push(rule(format!("worst of [{}]", rules.join("; ")), "worst".into(), status));
+    RegimeCheck { component: Component::Mount, title: "Tracking rate", status, details, equations, verdict }
 }
 
 /// Can the mount accelerate fast enough to follow the pass?
@@ -574,25 +768,43 @@ fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
     let omega_rad_s = r.rate_vs_ground / ARCSEC_PER_RADIAN;
     let required = MountDynamicsCalculator::peak_tracking_accel_rad_s2(omega_rad_s) * DEG_PER_RADIAN;
     let mut details = vec![kv("Required peak acceleration", format!("{required:.5} deg/s^2"))];
+    let mut equations = vec![
+        eq(
+            "omega",
+            "rate vs ground (\"/s) / 206264.806",
+            format!("{} / {}", num(r.rate_vs_ground), ARCSEC_PER_RADIAN.to_string()),
+            format!("{} rad/s", num(omega_rad_s)),
+        ),
+        eq(
+            "Required peak acceleration",
+            &format!("{} x omega^2 x 180 / pi", format!("{PEAK_ACCEL_COEFF:.6}")),
+            format!("{} x {}^2 x {}", format!("{PEAK_ACCEL_COEFF:.6}"), num(omega_rad_s), format!("{DEG_PER_RADIAN:.6}")),
+            format!("{} deg/s^2", num(required)),
+        ),
+    ];
 
     if r.mode == TrackingMode::Stare {
         details.push(kv("Mode", "stare: tracking off".to_string()));
+        equations.push(rule("PASS in stare mode (tracking off)".into(), "stare".into(), Status::Pass));
         return RegimeCheck {
             component: Component::Mount,
             title,
             status: Status::Pass,
             details,
+            equations,
             verdict: "The target is Earth-fixed. The mount never has to accelerate to follow it."
                 .to_string(),
         };
     }
 
     let Some(m) = cfg.payload.mount.as_ref() else {
+        equations.push(rule("INFO with no mount selected".into(), "no mount".into(), Status::Info));
         return RegimeCheck {
             component: Component::Mount,
             title,
             status: Status::Info,
             details,
+            equations,
             verdict: "No mount selected.".to_string(),
         };
     };
@@ -600,11 +812,17 @@ fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
     let Some(max) = plausible(m.max_accel_deg_s2, ranges::ACCEL_MIN_DEG_S2, ranges::ACCEL_MAX_DEG_S2)
     else {
         let status = if required > limits::ACCEL_MATTERS_DEG_S2 { Status::Warn } else { Status::Info };
+        equations.push(rule(
+            format!("maximum acceleration unknown: WARN if required > {} deg/s^2, else INFO", limits::ACCEL_MATTERS_DEG_S2),
+            format!("required = {} deg/s^2", num(required)),
+            status,
+        ));
         return RegimeCheck {
             component: Component::Mount,
             title,
             status,
             details,
+            equations,
             verdict: format!("Maximum axis acceleration for {} is unknown. Ask the vendor.", m.name),
         };
     };
@@ -623,7 +841,13 @@ fn mount_acceleration(cfg: &Config, r: &Regime) -> RegimeCheck {
         Status::Warn => "The mount can just accelerate fast enough, with little margin for corrections.".to_string(),
         _ => "The mount cannot accelerate fast enough to follow the pass.".to_string(),
     };
-    RegimeCheck { component: Component::Mount, title, status, details, verdict }
+    equations.push(eq("Acceleration headroom", "max acceleration / required", format!("{} / {}", num(max), num(required)), format!("{}x", num(headroom))));
+    equations.push(rule(
+        bands_higher(limits::ACCEL_PASS_HEADROOM, limits::ACCEL_WARN_HEADROOM, "x"),
+        format!("headroom = {}x", num(headroom)),
+        status,
+    ));
+    RegimeCheck { component: Component::Mount, title, status, details, equations, verdict }
 }
 
 /// Can the mount get on target in time to use the pass?
@@ -635,6 +859,7 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
             title,
             status: Status::Info,
             details: vec![kv("Usable window", "effectively unlimited".to_string())],
+            equations: vec![rule("INFO when the window is unlimited".into(), "window unlimited".into(), Status::Info)],
             verdict: "The target stays available long enough that slew time does not compete with it."
                 .to_string(),
         };
@@ -649,6 +874,7 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
             title,
             status: Status::Info,
             details,
+            equations: vec![rule("INFO with no mount selected".into(), "no mount".into(), Status::Info)],
             verdict: "No mount selected.".to_string(),
         };
     };
@@ -686,7 +912,34 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
                 Status::Warn => "Getting on target eats a significant part of the window.".to_string(),
                 _ => "The mount cannot get on target in time to make use of the pass.".to_string(),
             };
-            RegimeCheck { component: Component::Mount, title, status, details, verdict }
+            let d = DEFAULT_SLEW_DISTANCE_DEG;
+            let ramp = v * v / a;
+            let equations = vec![
+                eq("Ramp distance", "v^2 / a", format!("{}^2 / {}", num(v), num(a)), format!("{} deg", num(ramp))),
+                if d >= ramp {
+                    eq(
+                        "Slew time (trapezoid, D >= v^2/a)",
+                        "v / a + D / v",
+                        format!("{} / {} + {} / {}", num(v), num(a), num(d), num(v)),
+                        format!("{} s", num(slew)),
+                    )
+                } else {
+                    eq(
+                        "Slew time (triangle, D < v^2/a)",
+                        "2 x sqrt(D / a)",
+                        format!("2 x sqrt({} / {})", num(d), num(a)),
+                        format!("{} s", num(slew)),
+                    )
+                },
+                eq("Slew + settle", "slew + settle", format!("{} + {}", num(slew), num(settle)), format!("{} s", num(total))),
+                eq("Window fraction", "(slew + settle) / window", format!("{} / {}", num(total), num(window)), format!("{}%", num(fraction * 100.0))),
+                rule(
+                    bands_lower(limits::SLEW_PASS_WINDOW_FRACTION * 100.0, limits::SLEW_WARN_WINDOW_FRACTION * 100.0, "%"),
+                    format!("fraction = {}%", num(fraction * 100.0)),
+                    status,
+                ),
+            ];
+            RegimeCheck { component: Component::Mount, title, status, details, equations, verdict }
         }
         (Some(v), None) => {
             let floor = DEFAULT_SLEW_DISTANCE_DEG / v;
@@ -696,6 +949,15 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
                 title,
                 status: Status::Info,
                 details,
+                equations: vec![
+                    eq(
+                        "Slew time lower bound",
+                        "D / v",
+                        format!("{} / {}", num(DEFAULT_SLEW_DISTANCE_DEG), num(v)),
+                        format!("{} s", num(floor)),
+                    ),
+                    rule("INFO when acceleration is unknown (lower bound only)".into(), "acceleration unknown".into(), Status::Info),
+                ],
                 verdict: format!(
                     "Axis acceleration for {} is unknown, so this is a lower bound only. Ask the vendor.",
                     m.name
@@ -707,6 +969,7 @@ fn mount_slew_settle(cfg: &Config, r: &Regime) -> RegimeCheck {
             title,
             status: Status::Info,
             details,
+            equations: vec![rule("INFO when the slew rate is unknown".into(), "slew rate unknown".into(), Status::Info)],
             verdict: format!("Maximum slew rate for {} is unknown. Ask the vendor.", m.name),
         },
     }
@@ -743,7 +1006,12 @@ fn mount_non_sidereal(cfg: &Config, r: &Regime) -> RegimeCheck {
             "Confirm with the vendor that the control software can track from a TLE or ephemeris at arbitrary rates.".to_string(),
         ),
     };
-    RegimeCheck { component: Component::Mount, title: "Non-sidereal tracking", status, details, verdict }
+    let equations = vec![rule(
+        "INFO if not required; if required: PASS when supported, FAIL when not, WARN when unknown".into(),
+        format!("required = {}, supported = {answer}", if r.needs_non_sidereal { "yes" } else { "no" }),
+        status,
+    )];
+    RegimeCheck { component: Component::Mount, title: "Non-sidereal tracking", status, details, equations, verdict }
 }
 
 // ---------------------------------------------------------------------------
@@ -794,11 +1062,53 @@ fn observation(cfg: &Config, ev: &Evaluation, r: &Regime) -> Observation {
     Observation { target_mag, mag_from, exposure_s, exp_from }
 }
 
+/// Equations for where the target magnitude and exposure came from, shared
+/// by the detection and saturation checks.
+fn observation_equations(o: &Observation, ev: &Evaluation, r: &Regime) -> Vec<String> {
+    let mut out = Vec::new();
+    if o.mag_from == "derived" {
+        let d_m = r.range_km * 1000.0;
+        out.push(eq(
+            "Target magnitude m",
+            &format!("{SUN_APPARENT_MAG} - 2.5 x log10(albedo x cross-section x phase / (pi x d^2))"),
+            format!(
+                "{SUN_APPARENT_MAG} - 2.5 x log10({} x {} x {} / (pi x {}^2))",
+                num(REFERENCE_TARGET_ALBEDO),
+                num(REFERENCE_TARGET_CROSS_SECTION_M2),
+                num(DEFAULT_PHASE_FACTOR),
+                num(d_m)
+            ),
+            num(o.target_mag),
+        ));
+    } else {
+        out.push(format!("Target magnitude m: entered = {}", num(o.target_mag)));
+    }
+    let residual = residual_rate_arcsec_s(r);
+    if o.exp_from == "entered" {
+        out.push(format!("Exposure t: entered = {} s", num(o.exposure_s)));
+    } else if residual <= 0.0 {
+        out.push(format!(
+            "Exposure t: residual rate is 0 (target held still), so the {MAX_EXPOSURE_S} s cap = {} s",
+            num(o.exposure_s)
+        ));
+    } else {
+        out.push(eq(
+            "Exposure t",
+            &format!("min(recorded star FWHM / residual rate, {MAX_EXPOSURE_S})"),
+            format!("min({} / {}, {MAX_EXPOSURE_S})", num(ev.metrics.star_fwhm_arcsec), num(residual)),
+            format!("{} s", num(o.exposure_s)),
+        ));
+    }
+    out
+}
+
 /// Is the target bright enough for this configuration to detect?
 fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
     let title = "Detection";
     let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
-    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = observation(cfg, ev, r);
+    let obs = observation(cfg, ev, r);
+    let mut equations = observation_equations(&obs, ev, r);
+    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = obs;
     let residual = residual_rate_arcsec_s(r);
     let star = ev.metrics.star_fwhm_arcsec;
 
@@ -818,6 +1128,82 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         DetectionCalculator::signal_coefficient(area, p.qe, p.throughput, exposure),
     );
 
+    let threshold = limits::DETECT_SNR_THRESHOLD;
+    let coefficient = DetectionCalculator::signal_coefficient(area, p.qe, p.throughput, exposure);
+    let t2 = threshold * threshold;
+    let s_min = (t2 + (t2 * t2 + 4.0 * t2 * noise_variance).sqrt()) / 2.0;
+    equations.extend([
+        eq("Trail", "residual rate x t", format!("{} x {}", num(residual), num(exposure)), format!("{}\"", num(trail))),
+        eq(
+            "Footprint n",
+            "(star / scale) x ((star + trail) / scale)",
+            format!("({} / {}) x (({} + {}) / {})", num(star), num(scale), num(star), num(trail), num(scale)),
+            format!("{} px", num(n_px)),
+        ),
+        eq(
+            "Signal S",
+            &format!("{} x 10^(-0.4 m) x area x QE x throughput x t", format!("{PHOTONS_M2_S_MAG0:e}")),
+            format!(
+                "{} x 10^(-0.4 x {}) x {} x {} x {} x {}",
+                format!("{PHOTONS_M2_S_MAG0:e}"),
+                num(target_mag),
+                num(area),
+                num(p.qe),
+                num(p.throughput),
+                num(exposure)
+            ),
+            format!("{} e-", num(signal)),
+        ),
+        eq(
+            "Sky B",
+            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2 x t x n", format!("{PHOTONS_M2_S_MAG0:e}")),
+            format!(
+                "{} x 10^(-0.4 x {}) x {} x {} x {} x {}^2 x {} x {}",
+                format!("{PHOTONS_M2_S_MAG0:e}"),
+                num(p.sky_mag_arcsec2),
+                num(area),
+                num(p.qe),
+                num(p.throughput),
+                num(scale),
+                num(exposure),
+                num(n_px)
+            ),
+            format!("{} e-", num(sky)),
+        ),
+        eq(
+            "SNR",
+            "S / sqrt(S + B + R^2 x n)",
+            format!("{} / sqrt({} + {} + {}^2 x {})", num(signal), num(signal), num(sky), num(p.read_noise_e), num(n_px)),
+            num(snr),
+        ),
+        eq(
+            "Noise without signal N",
+            "B + R^2 x n",
+            format!("{} + {}^2 x {}", num(sky), num(p.read_noise_e), num(n_px)),
+            format!("{} e-^2", num(noise_variance)),
+        ),
+        eq(
+            "Signal needed for SNR T",
+            "(T^2 + sqrt(T^4 + 4 T^2 N)) / 2",
+            format!("({}^2 + sqrt({}^4 + 4 x {}^2 x {})) / 2", num(threshold), num(threshold), num(threshold), num(noise_variance)),
+            format!("{} e-", num(s_min)),
+        ),
+        eq(
+            "Signal coefficient C",
+            &format!("{} x area x QE x throughput x t", format!("{PHOTONS_M2_S_MAG0:e}")),
+            format!(
+                "{} x {} x {} x {} x {}",
+                format!("{PHOTONS_M2_S_MAG0:e}"),
+                num(area),
+                num(p.qe),
+                num(p.throughput),
+                num(exposure)
+            ),
+            format!("{} e-", num(coefficient)),
+        ),
+        eq("Limiting magnitude", "-2.5 x log10(S_min / C)", format!("-2.5 x log10({} / {})", num(s_min), num(coefficient)), num(m_limit)),
+        eq("Margin", "limiting magnitude - m", format!("{} - {}", num(m_limit), num(target_mag)), format!("{:+.4} mag", m_limit - target_mag)),
+    ]);
     let mut details = vec![
         kv("Target magnitude", format!("{target_mag:.2} ({mag_from})")),
         kv("Exposure", format!("{exposure:.3} s ({exp_from})")),
@@ -859,8 +1245,10 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         "Too faint to detect in this configuration.".to_string()
     };
 
+    let snr_status = status;
     // None of the above means anything if the target left the sensor.
     let short_side_arcsec = ev.metrics.fov_w_deg.min(ev.metrics.fov_h_deg) * ARCSEC_PER_DEGREE;
+    let off_field = trail > short_side_arcsec;
     if trail > short_side_arcsec {
         details.push(kv("Trail vs field", "longer than the short side of the field".to_string()));
         verdict.push_str(" The trail is longer than the field, so the target streaks off the sensor during the exposure: shorten it.");
@@ -883,7 +1271,22 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
         }
     }
 
-    RegimeCheck { component: Component::System, title, status, details, verdict }
+    equations.push(rule(
+        format!(
+            "on SNR: {}; a PASS becomes WARN if the trail is longer than the field's short side ({}\") or an input was assumed",
+            bands_higher(limits::SNR_PASS, threshold, ""),
+            num(short_side_arcsec)
+        ),
+        format!(
+            "SNR = {} -> {}{}{}",
+            num(snr),
+            snr_status.word(),
+            if off_field { ", trail off the field" } else { "" },
+            if p.any_assumed() { format!(", assumed: {}", p.assumed.join(", ")) } else { String::new() }
+        ),
+        status,
+    ));
+    RegimeCheck { component: Component::System, title, status, details, equations, verdict }
 }
 
 /// Does the target's brightest pixel stay inside the detector's linear range?
@@ -896,7 +1299,9 @@ fn system_detection(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> R
 fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> RegimeCheck {
     let title = "Saturation";
     let p = Photometry::resolve(&cfg.telescope, &cfg.camera, site);
-    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = observation(cfg, ev, r);
+    let obs = observation(cfg, ev, r);
+    let mut equations = observation_equations(&obs, ev, r);
+    let Observation { target_mag, mag_from, exposure_s: exposure, exp_from } = obs;
     let residual = residual_rate_arcsec_s(r);
     let (well, well_from) =
         match plausible(cfg.camera.full_well_e, ranges::FULL_WELL_MIN, ranges::FULL_WELL_MAX) {
@@ -931,6 +1336,69 @@ fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> 
         fraction_at(exposure),
     );
     let pct = limits::SATURATION_WARN_FRACTION * 100.0;
+    let scale = ev.metrics.plate_scale;
+    let f_peak = fraction_at(exposure);
+    let coefficient = DetectionCalculator::signal_coefficient(area, p.qe, p.throughput, exposure);
+    let solved = |t: Option<f64>| t.map_or_else(|| format!("not reached within {} s", num(t_max)), |t| format!("{} s", num(t)));
+    equations.extend([
+        eq(
+            "Target rate A",
+            &format!("{} x 10^(-0.4 m) x area x QE x throughput", format!("{PHOTONS_M2_S_MAG0:e}")),
+            format!(
+                "{} x 10^(-0.4 x {}) x {} x {} x {}",
+                format!("{PHOTONS_M2_S_MAG0:e}"),
+                num(target_mag),
+                num(area),
+                num(p.qe),
+                num(p.throughput)
+            ),
+            format!("{} e-/s", num(target_rate)),
+        ),
+        eq(
+            "Sky per pixel B",
+            &format!("{} x 10^(-0.4 sky) x area x QE x throughput x scale^2", format!("{PHOTONS_M2_S_MAG0:e}")),
+            format!(
+                "{} x 10^(-0.4 x {}) x {} x {} x {} x {}^2",
+                format!("{PHOTONS_M2_S_MAG0:e}"),
+                num(p.sky_mag_arcsec2),
+                num(area),
+                num(p.qe),
+                num(p.throughput),
+                num(scale)
+            ),
+            format!("{} e-/px/s", num(sky_px_rate)),
+        ),
+        format!(
+            "Brightest-pixel fraction f: Gaussian PSF ({}\" FWHM) centred on a pixel, trailed {}\", integrated over one pixel = {}%",
+            num(ev.psf.sampled_fwhm(FieldPoint::Center)),
+            num(DetectionCalculator::trail_arcsec(residual, exposure)),
+            num(f_peak * 100.0)
+        ),
+        eq(
+            "Peak pixel",
+            "(A x f + B) x t",
+            format!("({} x {} + {}) x {}", num(target_rate), num(f_peak), num(sky_px_rate), num(exposure)),
+            format!("{} e-", num(peak)),
+        ),
+        eq("Fill", "peak / full well", format!("{} / {}", num(peak), num(well)), format!("{}%", num(fill * 100.0))),
+        eq(
+            "Linear limit",
+            &format!("{} x full well", limits::SATURATION_WARN_FRACTION),
+            format!("{} x {}", limits::SATURATION_WARN_FRACTION, num(well)),
+            format!("{} e-", num(linear_level)),
+        ),
+        format!("Longest linear exposure: solve (A x f(t) + B) x t = linear limit by bisection = {}", solved(t_linear)),
+        format!("Saturates at: solve (A x f(t) + B) x t = full well by bisection = {}", solved(t_full)),
+        match bright_limit {
+            Some(m) => eq(
+                "Brightest linear magnitude",
+                &format!("-2.5 x log10((linear limit - B x t) / (C x f)), C = {PHOTONS_M2_S_MAG0:e} x area x QE x throughput x t"),
+                format!("-2.5 x log10(({} - {} x {}) / ({} x {}))", num(linear_level), num(sky_px_rate), num(exposure), num(coefficient), num(f_peak)),
+                num(m),
+            ),
+            None => "Brightest linear magnitude: none, the sky alone passes the linear limit".to_string(),
+        },
+    ]);
     let fill_text = if fill < 0.01 {
         "under 1% of full well".to_string()
     } else if fill < 10.0 {
@@ -981,6 +1449,7 @@ fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> 
         );
     }
 
+    let fill_status = status;
     // As with detection, never claim a PASS on numbers the user did not supply.
     if !assumed.is_empty() {
         details.push(kv("Assumed inputs", assumed.join(", ")));
@@ -990,7 +1459,20 @@ fn system_saturation(cfg: &Config, ev: &Evaluation, r: &Regime, site: &Site) -> 
         }
     }
 
-    RegimeCheck { component: Component::System, title, status, details, verdict }
+    equations.push(rule(
+        format!(
+            "PASS if fill < {pct:.0}%; FAIL if even {} s saturates, or an entered exposure saturates (fill >= 100%); otherwise WARN; a PASS becomes WARN if an input was assumed",
+            short(limits::MIN_PRACTICAL_EXPOSURE_S)
+        ),
+        format!(
+            "fill = {}% at the {exp_from} exposure -> {}{}",
+            num(fill * 100.0),
+            fill_status.word(),
+            if assumed.is_empty() { String::new() } else { format!(", assumed: {}", assumed.join(", ")) }
+        ),
+        status,
+    ));
+    RegimeCheck { component: Component::System, title, status, details, equations, verdict }
 }
 
 /// Evaluate one configuration against every regime.

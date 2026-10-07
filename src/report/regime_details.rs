@@ -2,16 +2,17 @@
 
 use std::fmt;
 
-use super::{word, RULE};
+use super::{word, write_check_body, ReportStyle, RULE};
 use crate::checks::Evaluation;
 use crate::regimes::Component;
 
-/// Full detail for every regime check of one configuration.
-pub struct RegimeDetails<'a>(pub &'a Evaluation);
+/// Full detail for every regime check of one configuration, with or without
+/// each check's equations.
+pub struct RegimeDetails<'a>(pub &'a Evaluation, pub ReportStyle);
 
 impl fmt::Display for RegimeDetails<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let RegimeDetails(ev) = *self;
+        let RegimeDetails(ev, style) = *self;
 
         writeln!(f, "\n{RULE}")?;
         writeln!(f, " Orbital-regime evaluation: {}", ev.label)?;
@@ -34,10 +35,7 @@ impl fmt::Display for RegimeDetails<'_> {
             for comp in [Component::Telescope, Component::Camera, Component::Mount, Component::System] {
                 for k in r.checks.iter().filter(|k| k.component == comp) {
                     writeln!(f, "\n  {} {}: {}", k.status.tag(), comp.name(), k.title)?;
-                    for d in &k.details {
-                        writeln!(f, "         {d}")?;
-                    }
-                    writeln!(f, "         -> {}", k.verdict)?;
+                    write_check_body(f, "         ", &k.details, &k.equations, &k.verdict, style)?;
                 }
             }
             writeln!(f,

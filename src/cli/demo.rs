@@ -4,10 +4,10 @@ use scope_eval::checks;
 use scope_eval::constants::{DEFAULT_SEEING_ARCSEC, DEFAULT_WAVELENGTH_UM, DEMO_ASSUMED_POINTING_RMS_ARCSEC, GPS_TIMESTAMP_MS};
 use scope_eval::model::{Camera, Config, Mount, Payload, Site, Telescope};
 use scope_eval::presets;
-use scope_eval::report::{ComparisonReport, EvaluationReport, RegimeDetails};
+use scope_eval::report::{ComparisonReport, EvaluationReport, RegimeDetails, ReportStyle};
 
 /// Non-interactive comparison of the presets, useful as a worked example.
-pub fn run_demo() {
+pub fn run_demo(style: ReportStyle) {
     let site = Site {
         seeing_arcsec: DEFAULT_SEEING_ARCSEC,
         wavelength_um: DEFAULT_WAVELENGTH_UM,
@@ -54,8 +54,8 @@ pub fn run_demo() {
     println!("detection is capped at WARN throughout. That is the point of the demo.");
     let evals = checks::evaluate_all(&configs, &site);
     for (cfg, ev) in configs.iter().zip(evals.iter()) {
-        print!("{}", EvaluationReport(cfg, ev, &site));
+        print!("{}", EvaluationReport(cfg, ev, &site, style));
     }
-    print!("{}", RegimeDetails(&evals[0]));
+    print!("{}", RegimeDetails(&evals[0], style));
     print!("{}", ComparisonReport(&evals));
 }

@@ -39,6 +39,7 @@ You need a Rust toolchain, version 1.70 or newer (tested with 1.75). Install it 
 cargo build --release          # build
 cargo run --release            # interactive menu
 cargo run --release -- --demo  # evaluate the presets, show one full regime breakdown, compare all
+cargo run --release -- --demo --equations  # the same, with every check's equations and rule
 cargo run --release -- --help  # usage
 cargo test                     # run the worked examples from docs/learning, and the orbit-prop library's tests
 ```
@@ -130,6 +131,27 @@ For each configuration the tool runs the eight general checks, prints an ungrade
 
 The **reference** for depth and search speed is always the first configuration in the session. When you change the seeing, every stored configuration is re-evaluated in order, so the reference doesn't change.
 
+**Two report styles.** The standard report gives each check's numbers and verdict. The equations style (`--equations` on the command line, or **Report style** in the menu) prints the same report with, under each check, the equations behind its numbers with the actual values substituted, ending with the rule that turned the result into PASS, WARN or FAIL. A reviewer can redo every step by hand and see which threshold decided the status:
+
+```
+[WARN] 2. Sampling (plate scale vs seeing)
+       Plate scale (native) ....................... 0.739"/px
+       ...
+       Equations:
+         Plate scale: 206264.806 x (pixel (um) / 1000) / FL (mm) = 206264.806 x (3.7600 / 1000) / 1050.0 = 0.73862"/px
+         Star FWHM (center): sqrt(seeing^2 + diffraction^2 + optics^2 + diffusion^2) = sqrt(2.5000^2 + 0.33353^2 + 1.6028^2 + 0^2) = 2.9883"
+         Pixels across a star p: star FWHM / plate scale = 2.9883 / 0.73862 = 4.0458
+         ...
+         Rule: FAIL < 1 <= WARN < 1.5 <= PASS <= 2.5 (well sampled) < PASS <= 4 (mildly oversampled) < WARN <= 6 < FAIL; p = 4.0458 -> WARN
+       -> Oversampled. ...
+```
+
+The equations are built from the same variables the check uses, so they cannot drift from what was judged, and a test confirms that every check's rule names the status it reported. [`docs/learning/check_equations.py`](docs/learning/check_equations.py) recomputes every equation in a report with Python's own math:
+
+```bash
+cargo run --release -- --demo --equations | python3 docs/learning/check_equations.py
+```
+
 ### What the statuses mean
 
 | Status | Meaning |
@@ -156,7 +178,7 @@ These checks describe the optical system in general. They don't depend on the ta
 | 3 | Ideal pixel | What pixel size does this focal length want, and does the camera match it natively or after binning? | PASS / WARN | [2](docs/learning/02-seeing-and-sampling.md) |
 | 4 | Optics vs seeing | Does the optical blur enlarge stars noticeably beyond the seeing, at the center and at the sensor's corner? | PASS / WARN / FAIL (INFO without spot data) | [3](docs/learning/03-optics-and-focus.md) |
 | 5 | Area and depth | Effective collecting area after the obstruction, and depth in magnitudes vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
-| 6 | Field and search | Field of view, and etendue (search speed) vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
+| 6 | Field and search | True field of view by two methods (exact trigonometric and small-angle), and etendue (search speed) vs the reference | INFO | [4](docs/learning/04-light-collection-and-search.md) |
 | 7 | Focus tolerance | How wide is the critical focus zone? | PASS / WARN | [3](docs/learning/03-optics-and-focus.md) |
 | 8 | Practical fit | Is the payload within 70% of the mount's rating? Is there enough back focus? | PASS / WARN / FAIL | [5](docs/learning/05-practical-fit.md) |
 
@@ -361,7 +383,7 @@ The default seeing (`DEFAULT_SEEING_ARCSEC`, 2.5") and reference wavelength (`DE
 ## Assumptions and limitations
 
 * **Seeing is a single number.** Real seeing varies by night, by elevation angle and through the night. Run the tool at your best, typical and worst seeing to see how sensitive a choice is.
-* **Small-angle approximation.** Field of view uses size / focal length. The error is well under 0.1% for fields of a few degrees.
+* **Small-angle approximation.** Check 6 reports the true field of view two ways: exactly, as 2 atan(size / 2 FL), and by the small-angle approximation, size / FL. The small-angle value, which overstates the field by about (size / FL)^2 / 12, is the one everything downstream uses. The difference is printed: under 0.03% for every preset.
 * **Obstruction ignores support vanes.** Spider vanes and cables in front of the aperture block a few more percent of the light and are not included.
 * **Gaussian blur model.** Converting RMS spot to FWHM and adding blurs in quadrature both assume roughly Gaussian blurs. Real optical blur is often not Gaussian, so treat check 4 as an approximate screen, not a performance prediction.
 * **Linear spot interpolation.** Spot size between and beyond quoted field points is estimated linearly.
@@ -488,6 +510,7 @@ src/
   constants.rs every named constant: physical constants, default assumptions, judgment thresholds
   checks.rs    the eight general checks and their PASS/WARN/FAIL judgments
   regimes.rs   orbital-regime definitions and telescope/camera/mount/system judgments
+  equations.rs formatting for the substituted equations and status rules each check records
   photometry.rs  photometric inputs with defaults substituted, and which defaults were assumed
   psf.rs       the system point spread function budget behind checks 2 and 3 and detection
   passes.rs    orbit source to propagator, stale-TLE note, per-pass "Mount can follow?" judgment
@@ -498,7 +521,7 @@ src/
     regime_details.rs  every regime check with its numbers
     passes.rs          the pass table
     formulas.rs        the formula summary
-  main.rs      the scope-eval binary: arguments, --help, and dispatch to cli/
+  main.rs      the scope-eval binary: arguments (--demo, --equations, --help), and dispatch to cli/
   cli/         the command-line front end; the only code that reads input or prints
     interactive.rs     the main menu loop and pass prediction
     prompts.rs         prompts that build configurations, sites and orbits
@@ -508,7 +531,8 @@ crates/orbit-prop/  satellite propagation (SGP4, Keplerian + J2), observer geome
 crates/scope-sim/   time-stepped simulation of a mount tracking a pass, with pointing error
 crates/scope-sim-wasm/  WebAssembly bindings for scope-sim
 dashboard/          React + Material UI dashboard that runs and visualizes the simulation
-docs/learning/      lessons on the concepts, plus check_examples.py, an independent check of every worked example
+docs/learning/      lessons on the concepts, plus check_examples.py (an independent check of every worked
+                    example) and check_equations.py (recomputes every equation in a --equations report)
 ```
 
 **Design notes**

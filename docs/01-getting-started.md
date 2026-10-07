@@ -23,6 +23,7 @@ You need a Rust toolchain, version 1.70 or newer (tested with 1.75). Install it 
 cargo build --release          # build
 cargo run --release            # interactive menu
 cargo run --release -- --demo  # evaluate the presets, show one full regime breakdown, compare all
+cargo run --release -- --demo --equations  # the same, with every check's equations and rule
 cargo run --release -- --help  # usage
 cargo test                     # run the worked examples from these docs, and the orbit-prop tests
 ```

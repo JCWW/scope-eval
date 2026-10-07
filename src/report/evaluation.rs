@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{word, RULE};
+use super::{word, write_check_body, ReportStyle, RULE};
 use crate::checks::{kv, Evaluation, Status};
 use crate::constants::plausible_ranges as ranges;
 use crate::constants::DEFAULT_SKY_MAG_ARCSEC2;
@@ -12,12 +12,12 @@ use crate::psf::{FieldPoint, PsfBudget};
 use crate::regimes::Component;
 
 /// The full report for one configuration: the eight checks, the GEO timing
-/// reference and the regime summary.
-pub struct EvaluationReport<'a>(pub &'a Config, pub &'a Evaluation, pub &'a Site);
+/// reference and the regime summary, with or without each check's equations.
+pub struct EvaluationReport<'a>(pub &'a Config, pub &'a Evaluation, pub &'a Site, pub ReportStyle);
 
 impl fmt::Display for EvaluationReport<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let EvaluationReport(cfg, ev, site) = *self;
+        let EvaluationReport(cfg, ev, site, style) = *self;
 
         let t = &cfg.telescope;
         let c = &cfg.camera;
@@ -48,10 +48,7 @@ impl fmt::Display for EvaluationReport<'_> {
 
         for chk in &ev.checks {
             writeln!(f, "\n{} {}. {}", chk.status.tag(), chk.number, chk.title)?;
-            for d in &chk.details {
-                writeln!(f, "       {d}")?;
-            }
-            writeln!(f, "       -> {}", chk.verdict)?;
+            write_check_body(f, "       ", &chk.details, &chk.equations, &chk.verdict, style)?;
         }
 
         write!(f, "{}", PsfReport(&ev.psf))?;
