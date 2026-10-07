@@ -355,6 +355,63 @@ cameras:
     weight_lb: 2.0
     source: "Line time from the Moravian C3 manual. Weight from QHY600 PRO (915 g). Rolling shutter."
 
+  # Named IMX455 cameras. The sensor is the same as above; what differs is
+  # each vendor's published array size, line time and weight.
+  - name: "ZWO ASI6200MM Pro / MC Pro (Sony IMX455)"
+    pixel_um: 3.76
+    width_px: 9576
+    height_px: 6388
+    read_noise_e: null
+    qe: null
+    full_well_e: null
+    shutter: !rolling { line_time_us: null }
+    weight_lb: 1.54
+    source: "zwoastro.com/product/asi6200 and the ASI6200 manual v1.4 (accessed 2026-10-07): 9576 x 6388, 3.76 um, body 0.7 kg (1.54 lb), 17.5 mm back focus. ZWO publishes no line time."
+
+  - name: "QHYCCD QHY600M / QHY600C PH (Sony IMX455)"
+    pixel_um: 3.76
+    width_px: 9576
+    height_px: 6388
+    read_noise_e: null
+    qe: null
+    full_well_e: null
+    shutter: !rolling { line_time_us: null }
+    weight_lb: null
+    source: "qhyccd.com/astronomical-camera-qhy600 (accessed 2026-10-07): effective 9576 x 6388 (9600 x 6422 with overscan and optically black area), 3.76 um. Back focus 17.5 mm + 6 mm on the PH, 14.5 mm on the SBFL. QHYCCD publishes no line time; no vendor weight was found for the PH (the generic IMX455 preset's 915 g is the PRO's)."
+
+  - name: "Atik Apx60 (Sony IMX455)"
+    pixel_um: 3.76
+    width_px: 9576
+    height_px: 6380
+    read_noise_e: null
+    qe: null
+    full_well_e: null
+    shutter: !rolling { line_time_us: null }
+    weight_lb: 2.2
+    source: "atik-cameras.com/large-format-cooled-cmos/apx-60 (accessed 2026-10-07): 9576 x 6380, 3.76 um. Atik's IMX455 guide gives 9576 x 6388 instead: confirm with the vendor. About 1 kg (2.2 lb) from Atik's Apx series datasheet; one dealer lists 0.8 to 1.1 kg. Atik publishes no line time."
+
+  - name: "Moravian Instruments C3-61000 PRO (Sony IMX455)"
+    pixel_um: 3.76
+    width_px: 9576
+    height_px: 6388
+    read_noise_e: null
+    qe: null
+    full_well_e: null
+    shutter: !rolling { line_time_us: 39.028 }
+    weight_lb: 3.5
+    source: "Moravian C3 Series User's Guide, gxccd.com (accessed 2026-10-07): 9576 x 6388, 3.76 um, 39.028 us per line (0.25 s from first to last line). 1.6 kg (3.5 lb) with standard cooling and no filter wheel; 1.8 kg enhanced cooling, 2.1 kg with the internal filter wheel."
+
+  - name: "FLI Aurora AR455 (Sony IMX455)"
+    pixel_um: 3.76
+    width_px: 9568
+    height_px: 6380
+    read_noise_e: null
+    qe: null
+    full_well_e: null
+    shutter: !rolling { line_time_us: null }
+    weight_lb: 2.0
+    source: "flicamera.com/aurora/AR455.php and the AR455 spec sheet, marked preliminary (accessed 2026-10-07): 9568 x 6380 active, 3.76 um, about 2 lb (0.9 kg). Mechanical shutter optional. FLI publishes no line time."
+
   - name: "Sony IMX571 APS-C (Moravian C3-26000 PRO)"
     pixel_um: 3.76
     width_px: 6252
